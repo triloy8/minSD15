@@ -17,7 +17,6 @@ Two papers underpin the maths and variable names used here:
 2. **Song et al.** – *Score‑Based Generative Modeling through Stochastic Differential Equations*
 
 **Karras et al.** equation *(1)* and *(2)* give us:
-
 ```math
 d\mathbf{x}_t = -\,\dot\sigma(t)\,\sigma(t)\,
 \nabla_{\mathbf{x}}\!\log p\!\bigl(\mathbf{x}_t;\,\sigma(t)\bigr)\,dt
@@ -29,14 +28,12 @@ d\mathbf{x}_t = -\,\dot\sigma(t)\,\sigma(t)\,
 ```
 
 Thus:
-
 ```math
 d\mathbf{x} = -\,\dot\sigma(t)\,\sigma(t)\,
 \frac{D(\mathbf{x};\sigma)-\mathbf{x}}{\sigma^{2}}\;dt
 ```
 
 Euler gives us:
-
 ```math
 \mathbf{x}_{i+1}-\mathbf{x}_{i}
    = -\,(\sigma_{i+1}-\sigma_{i})\,
@@ -44,7 +41,6 @@ Euler gives us:
 ```
 
 And thus:
-
 ```math
 \boxed{\;
 \mathbf{x}_{i+1}
@@ -55,7 +51,6 @@ And thus:
 ```
 
 In **Karras et al.**, equation *(7)*, the denoiser function is defined as such:
-
 ```math
 D_{\theta}(x,\sigma)
    = c_{\text{skip}}(\sigma)\,x
@@ -65,16 +60,20 @@ D_{\theta}(x,\sigma)
 ```
 
 Using the **Karras et al.** *Table 1 - “VP” column* we define as in **Song et al.**:
-
 ```math
-c_{\text{skip}}(\sigma)=1 \\
-c_{\text{out}}(\sigma)=-\sigma \\
-c_{\text{in}}(\sigma)=\dfrac{1}{\sigma^{2}+1} \\
+c_{\text{skip}}(\sigma)=1
+```
+```math
+c_{\text{out}}(\sigma)=-\sigma
+```
+```math
+c_{\text{in}}(\sigma)=\dfrac{1}{\sigma^{2}+1}
+```
+```math
 c_{\text{noise}}(\sigma)=\bigl(M-1\bigr)\,\sigma^{-1}(\sigma)
 ```
 
 Which gives us for discrete timesteps:
-
 ```math
 D_{\theta}(x_i;\sigma_i)
   = c_{\text{skip}}(\sigma_i)\,x_i
@@ -86,13 +85,11 @@ D_{\theta}(x_i;\sigma_i)
 ```
 
 Given:
-
 ```math
 t_i = (M-1)\,\sigma^{-1}(\sigma_i) \quad\text{(reverse timesteps)}
 ```
 
 We can write:
-
 ```math
 \boxed{
 D_{\theta}(x_i;\sigma_i)
@@ -106,7 +103,6 @@ D_{\theta}(x_i;\sigma_i)
 ```
 
 And finally:
-
 ```math
 \boxed{
 x_{i+1}
