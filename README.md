@@ -2,6 +2,13 @@
 
 This project is a minimal, educational re‑implementation of the Stable Diffusion 1.5 sampling pipeline. I use HuggingFace Diffusers as a reference, then strip away all the extra convenience layers. The aim is simplicity and **NOT** API compatibility with Diffusers.
 
+# Usage
+
+Make sure to have [`uv`](https://github.com/astral-sh/uv) installed and just use 
+```bash
+  uv run min_pipeline.py
+```
+
 # Components
 
 * **Pipeline skeleton** – deconstructed the Diffusers pipeline
