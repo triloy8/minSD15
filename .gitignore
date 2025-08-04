@@ -1,2 +1,7 @@
-_pycache*
+__pycache__
 *.safetensors
+config/*
+weights/*
+output/*
+*.png
+.venv

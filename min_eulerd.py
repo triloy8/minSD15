@@ -1,5 +1,5 @@
 # Copyright 2025 HuggingFace Inc.
-# Modifications Copyright 2025 [Your Name]
+# Modifications Copyright 2025 triloy8
 #
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -7,7 +7,7 @@
 #   • Original file:
 #       https://github.com/huggingface/diffusers
 #
-# Changes by [Your Name]:
+# Changes by triloy8:
 #   • Lean version 
 
 from utils import interp

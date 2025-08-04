@@ -1,0 +1,27 @@
+[project]
+name = "minsd15"
+version = "1.0.0"
+description = "Educational re-implementation of the Stable Diffusion 1.5 sampling pipeline "
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "pillow",
+    "numpy",
+    "pytest",
+    "transformers",
+    "diffusers",
+    "torch",
+    "tqdm>=4.67.1",
+]
+
+[tool.uv]
+python-preference = "managed"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+extend-select = ["UP"]
+ignore = [
+    "F722"
+]

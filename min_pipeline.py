@@ -25,7 +25,7 @@ from pathlib import Path
 ######################## LOADING BASE MODELS ########################
 #####################################################################
 
-home_path= Path("/home/tadhiel/diff_min")
+home_path= Path("/home/tadhiel/minSD15")
 
 clip_tokenizer_config = json.load(open(str(home_path / "config/tokenizer/tokenizer_config.json")))
 clip_config = json.load(open(home_path / "config/clip_config.json"))
@@ -134,4 +134,4 @@ image = (image / 2 + 0.5).clamp(0, 1).squeeze()
 image = (image.permute(1, 2, 0) * 255).to(torch.uint8).cpu().numpy()
 image = Image.fromarray(image)
 
-image.save("generated.png")
+image.save("output/generated.png")
