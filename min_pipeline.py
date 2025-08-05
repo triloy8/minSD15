@@ -19,37 +19,34 @@ from safetensors.torch import load_file
 from tqdm.auto import tqdm
 from PIL import Image
 import json
-from pathlib import Path
 
 #####################################################################
 ######################## LOADING BASE MODELS ########################
 #####################################################################
 
-home_path= Path("/home/tadhiel/minSD15")
-
-clip_tokenizer_config = json.load(open(str(home_path / "config/tokenizer/tokenizer_config.json")))
-clip_config = json.load(open(home_path / "config/clip_config.json"))
-vae_config = json.load(open(home_path / "config/vae_config.json"))
+clip_tokenizer_config = json.load(open(str("./config/tokenizer/tokenizer_config.json")))
+clip_config = json.load(open("./config/clip_config.json"))
+vae_config = json.load(open("./config/vae_config.json"))
 
 scheduler = EulerDiscreteScheduler()
 
-clip_tokenizer_vocab_path = home_path / "config/tokenizer/vocab.json"
-clip_tokenizer_merges_path = home_path / "config/tokenizer/merges.txt"
+clip_tokenizer_vocab_path = "./config/tokenizer/vocab.json"
+clip_tokenizer_merges_path = "./config/tokenizer/merges.txt"
 clip_tokenizer = CLIPTokenizer(clip_tokenizer_vocab_path, clip_tokenizer_merges_path, model_max_length=77)
 
-clip_model_path = home_path / "weights/clip.fp16.safetensors"
+clip_model_path = "./weights/clip.fp16.safetensors"
 clip_state_dict = load_file(clip_model_path)
 clip_state_dict.pop("text_model.embeddings.position_ids")
 clip_text_config = CLIPTextConfig(**clip_config)
 clip = CLIPTextModel(clip_text_config)
 clip.load_state_dict(clip_state_dict)
 
-unet_model_path = home_path / "weights/unet.fp16.safetensors"
+unet_model_path = "./weights/unet.fp16.safetensors"
 unet_state_dict = load_file(unet_model_path)
 unet = UNet2DConditionModel()
 unet.load_state_dict(unet_state_dict)
 
-vae_model_path = home_path/"weights/vae.fp16.safetensors"
+vae_model_path = "./weights/vae.fp16.safetensors"
 vae_state_dict = load_file(vae_model_path)
 vae = AutoencoderKL(**vae_config)
 vae.load_state_dict(vae_state_dict)
