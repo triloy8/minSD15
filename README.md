@@ -124,7 +124,6 @@ x_{i+1}
 
 # Things to consider when running the code
 
-* You need to specify the *home_path* in *min_pipeline.py*
 * You need to make a *weights* and *config* at the root of the folder, with the appropriate diffusers weights/configs
 * The code as is assumes you have a *cuda* compatible device
 * No negative prompting
