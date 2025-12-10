@@ -11,6 +11,7 @@
 #   • Deconstructed pipeline
 
 from diffusers import AutoencoderKL
+from huggingface_hub import snapshot_download
 from min_eulerd import EulerDiscreteScheduler
 from min_unet import UNet2DConditionModel
 from transformers import CLIPTextModel, CLIPTokenizer, CLIPTextConfig
@@ -18,7 +19,32 @@ import torch
 from safetensors.torch import load_file
 from tqdm.auto import tqdm
 from PIL import Image
+from pathlib import Path
 import json
+
+#####################################################################
+################ DOWNLOADING MODEL WEIGHTS / CONFIGS ################
+#####################################################################
+
+expected_artifacts = [
+    Path("config/tokenizer/vocab.json"),
+    Path("config/tokenizer/merges.txt"),
+    Path("config/tokenizer/tokenizer_config.json"),
+    Path("config/clip_config.json"),
+    Path("config/vae_config.json"),
+    Path("weights/clip.fp16.safetensors"),
+    Path("weights/unet.fp16.safetensors"),
+    Path("weights/vae.fp16.safetensors"),
+]
+
+if not all(path.exists() for path in expected_artifacts):
+    print("Fetching config and weight files from Hugging Face Hub...")
+    snapshot_download(
+        repo_id="trixyL/minsd15",
+        local_dir=".",
+        local_dir_use_symlinks=False,
+        allow_patterns=["config/*", "weights/*"],
+    )
 
 #####################################################################
 ######################## LOADING BASE MODELS ########################
@@ -131,4 +157,5 @@ image = (image / 2 + 0.5).clamp(0, 1).squeeze()
 image = (image.permute(1, 2, 0) * 255).to(torch.uint8).cpu().numpy()
 image = Image.fromarray(image)
 
+Path("output").mkdir(parents=True, exist_ok=True)
 image.save("output/generated.png")

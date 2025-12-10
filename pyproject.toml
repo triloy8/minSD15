@@ -10,6 +10,7 @@ dependencies = [
     "pytest",
     "transformers",
     "diffusers",
+    "huggingface-hub",
     "torch",
     "tqdm>=4.67.1",
 ]
