@@ -22,8 +22,15 @@ from torch import nn
 
 from causal_mask import create_causal_mask
 
-from activations import ACT2FN
 from configuration_clip import CLIPConfig, CLIPTextConfig
+
+
+class QuickGELUActivation(nn.Module):
+    """
+    Applies GELU approximation that is fast but somewhat inaccurate. See: https://github.com/hendrycks/GELUs
+    """
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        return input * torch.sigmoid(1.702 * input)
 
 
 class CLIPTextEmbeddings(nn.Module):
@@ -153,7 +160,8 @@ class CLIPMLP(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.activation_fn = ACT2FN[config.hidden_act]
+        # config.hidden_act
+        self.activation_fn = QuickGELUActivation()
         self.fc1 = nn.Linear(config.hidden_size, config.intermediate_size)
         self.fc2 = nn.Linear(config.intermediate_size, config.hidden_size)
 
