@@ -22,8 +22,6 @@ from torch import nn
 
 from causal_mask import create_causal_mask
 
-from configuration_clip import CLIPConfig, CLIPTextConfig
-
 
 class QuickGELUActivation(nn.Module):
     """
@@ -34,16 +32,20 @@ class QuickGELUActivation(nn.Module):
 
 
 class CLIPTextEmbeddings(nn.Module):
-    def __init__(self, config: CLIPTextConfig):
+    def __init__(self):
         super().__init__()
-        embed_dim = config.hidden_size
+        # config.hidden_size
+        embed_dim = 768
 
-        self.token_embedding = nn.Embedding(config.vocab_size, embed_dim)
-        self.position_embedding = nn.Embedding(config.max_position_embeddings, embed_dim)
+        # config.vocab_size
+        self.token_embedding = nn.Embedding(49408, embed_dim)
+        # config.max_position_embeddings
+        self.position_embedding = nn.Embedding(77, embed_dim)
 
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
         self.register_buffer(
-            "position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)), persistent=False
+            # config.max_position_embeddings -> 77
+            "position_ids", torch.arange(77).expand((1, -1)), persistent=False
         )
 
     def forward(
@@ -97,11 +99,12 @@ def eager_attention_forward(
 class CLIPAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: CLIPTextConfig):
+    def __init__(self,):
         super().__init__()
-        self.config = config
-        self.embed_dim = config.hidden_size
-        self.num_heads = config.num_attention_heads
+        # config.hidden_size
+        self.embed_dim = 768
+        # config.num_attention_heads
+        self.num_heads = 12
         self.head_dim = self.embed_dim // self.num_heads
         if self.head_dim * self.num_heads != self.embed_dim:
             raise ValueError(
@@ -109,7 +112,8 @@ class CLIPAttention(nn.Module):
                 f" {self.num_heads})."
             )
         self.scale = self.head_dim**-0.5
-        self.dropout = config.attention_dropout
+        # config.attention_dropout
+        self.dropout =  0.0
         self.is_causal = False
 
         self.k_proj = nn.Linear(self.embed_dim, self.embed_dim)
@@ -157,13 +161,14 @@ class CLIPAttention(nn.Module):
 
 
 class CLIPMLP(nn.Module):
-    def __init__(self, config):
+    def __init__(self):
         super().__init__()
-        self.config = config
         # config.hidden_act
         self.activation_fn = QuickGELUActivation()
-        self.fc1 = nn.Linear(config.hidden_size, config.intermediate_size)
-        self.fc2 = nn.Linear(config.intermediate_size, config.hidden_size)
+        # config.hidden_size, config.intermediate_size
+        self.fc1 = nn.Linear(768, 3072)
+        # config.intermediate_size, config.hidden_size
+        self.fc2 = nn.Linear(3072, 768)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.fc1(hidden_states)
@@ -173,13 +178,16 @@ class CLIPMLP(nn.Module):
 
 
 class CLIPEncoderLayer(nn.Module):
-    def __init__(self, config: CLIPTextConfig):
+    def __init__(self):
         super().__init__()
-        self.embed_dim = config.hidden_size
-        self.self_attn = CLIPAttention(config)
-        self.layer_norm1 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps)
-        self.mlp = CLIPMLP(config)
-        self.layer_norm2 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps)
+        # config.hidden_size
+        self.embed_dim = 768
+        self.self_attn = CLIPAttention()
+        # config.layer_norm_eps
+        self.layer_norm1 = nn.LayerNorm(self.embed_dim, eps=1e-05)
+        self.mlp = CLIPMLP()
+        # config.layer_norm_eps
+        self.layer_norm2 = nn.LayerNorm(self.embed_dim, eps=1e-05)
 
     def forward(
         self,
@@ -206,7 +214,6 @@ class CLIPEncoderLayer(nn.Module):
 
 
 class CLIPPreTrainedModel(nn.Module):
-    config: CLIPConfig
     base_model_prefix = "clip"
     input_modalities = ("image", "text")
     supports_gradient_checkpointing = True
@@ -229,10 +236,10 @@ class CLIPEncoder(nn.Module):
         config: CLIPConfig
     """
 
-    def __init__(self, config: CLIPConfig):
+    def __init__(self):
         super().__init__()
-        self.config = config
-        self.layers = nn.ModuleList([CLIPEncoderLayer(config) for _ in range(config.num_hidden_layers)])
+        # config.num_hidden_layers
+        self.layers = nn.ModuleList([CLIPEncoderLayer() for _ in range(12)])
         self.gradient_checkpointing = False
 
     def forward(
@@ -269,16 +276,18 @@ class CLIPEncoder(nn.Module):
 
 
 class CLIPTextTransformer(nn.Module):
-    def __init__(self, config: CLIPTextConfig):
+    def __init__(self):
         super().__init__()
-        self.config = config
-        embed_dim = config.hidden_size
-        self.embeddings = CLIPTextEmbeddings(config)
-        self.encoder = CLIPEncoder(config)
-        self.final_layer_norm = nn.LayerNorm(embed_dim, eps=config.layer_norm_eps)
+        # config.hidden_size
+        embed_dim = 768
+        self.embeddings = CLIPTextEmbeddings()
+        self.encoder = CLIPEncoder()
+        # config.layer_norm_eps
+        self.final_layer_norm = nn.LayerNorm(embed_dim, eps=1e-05)
 
         # For `pooled_output` computation
-        self.eos_token_id = config.eos_token_id
+        # config.eos_token_id
+        self.eos_token_id = 2
 
     def forward(
         self,
@@ -295,8 +304,9 @@ class CLIPTextTransformer(nn.Module):
 
         hidden_states = self.embeddings(input_ids=input_ids, position_ids=position_ids)
 
+        # causal mask takes config
         attention_mask = create_causal_mask(
-            config=self.config,
+            # config=self.config,
             input_embeds=hidden_states,
             attention_mask=attention_mask,
             cache_position=torch.arange(hidden_states.shape[1], device=hidden_states.device),
@@ -342,14 +352,13 @@ class CLIPTextTransformer(nn.Module):
 
 
 class CLIPTextModel(CLIPPreTrainedModel):
-    config: CLIPTextConfig
     input_modalities = ("text",)
 
     _no_split_modules = ["CLIPTextEmbeddings", "CLIPEncoderLayer"]
 
-    def __init__(self, config: CLIPTextConfig):
-        super().__init__(config)
-        self.text_model = CLIPTextTransformer(config)
+    def __init__(self):
+        super().__init__()
+        self.text_model = CLIPTextTransformer()
         # Initialize weights and apply final processing
         self.post_init()
 
