@@ -20,11 +20,10 @@ from typing import Optional, Any
 import torch
 from torch import nn
 
-from activations import ACT2FN
 from causal_mask import create_causal_mask
-from configuration_clip import CLIPConfig, CLIPTextConfig
 
-from modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling
+from activations import ACT2FN
+from configuration_clip import CLIPConfig, CLIPTextConfig
 
 
 class CLIPTextEmbeddings(nn.Module):
@@ -233,7 +232,7 @@ class CLIPEncoder(nn.Module):
         inputs_embeds,
         attention_mask: Optional[torch.Tensor] = None,
         **kwargs: Any,
-    ) -> BaseModelOutput:
+    ) -> torch.Tensor:
         r"""
         Args:
             inputs_embeds (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
@@ -256,9 +255,9 @@ class CLIPEncoder(nn.Module):
                 **kwargs,
             )
 
-        return BaseModelOutput(
-            last_hidden_state=hidden_states,
-        )
+        last_hidden_state=hidden_states
+
+        return last_hidden_state
 
 
 class CLIPTextTransformer(nn.Module):
@@ -279,7 +278,7 @@ class CLIPTextTransformer(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
         **kwargs: Any,
-    ) -> BaseModelOutputWithPooling:
+    ) -> Any:
         if input_ids is None:
             raise ValueError("You have to specify input_ids")
 
@@ -297,15 +296,14 @@ class CLIPTextTransformer(nn.Module):
         )
 
         kwargs.pop("is_causal", None)
-        encoder_outputs: BaseModelOutput = self.encoder(
+        encoder_last_hidden_state = self.encoder(
             inputs_embeds=hidden_states,
             attention_mask=attention_mask,
             is_causal=True,
             **kwargs,
         )
 
-        last_hidden_state = encoder_outputs.last_hidden_state
-        last_hidden_state = self.final_layer_norm(last_hidden_state)
+        last_hidden_state = self.final_layer_norm(encoder_last_hidden_state)
 
         if self.eos_token_id == 2:
             # The `eos_token_id` was incorrect before PR #24773: Let's keep what have been done here.
@@ -329,10 +327,10 @@ class CLIPTextTransformer(nn.Module):
                 .argmax(dim=-1),
             ]
 
-        return BaseModelOutputWithPooling(
-            last_hidden_state=last_hidden_state,
-            pooler_output=pooled_output,
-        )
+        last_hidden_state=last_hidden_state
+        pooler_output=pooled_output
+
+        last_hidden_state, pooler_output
 
 
 class CLIPTextModel(CLIPPreTrainedModel):
@@ -360,7 +358,7 @@ class CLIPTextModel(CLIPPreTrainedModel):
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
         **kwargs: Any,
-    ) -> BaseModelOutputWithPooling:
+    ) -> Any:
         r"""
         Examples:
 
@@ -377,6 +375,7 @@ class CLIPTextModel(CLIPPreTrainedModel):
         >>> pooled_output = outputs.pooler_output  # pooled (EOS token) states
         ```"""
 
+        # last_hidden_state, pooler_output
         return self.text_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
