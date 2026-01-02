@@ -14,7 +14,7 @@ from diffusers import AutoencoderKL
 from huggingface_hub import snapshot_download
 from min_eulerd import EulerDiscreteScheduler
 from min_unet import UNet2DConditionModel
-from modeling_clip import CLIPTextModel
+from min_clip import CLIPTextModel
 from transformers import CLIPTokenizer, CLIPTextConfig
 import torch
 from safetensors.torch import load_file
