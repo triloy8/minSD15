@@ -14,7 +14,6 @@ from diffusers import AutoencoderKL
 from huggingface_hub import snapshot_download
 from min_eulerd import EulerDiscreteScheduler
 from min_unet import UNet2DConditionModel
-# from transformers import CLIPTextModel
 from modeling_clip import CLIPTextModel
 from transformers import CLIPTokenizer, CLIPTextConfig
 import torch
@@ -66,7 +65,7 @@ clip_model_path = "./weights/clip.fp16.safetensors"
 clip_state_dict = load_file(clip_model_path)
 clip_state_dict.pop("text_model.embeddings.position_ids")
 clip_text_config = CLIPTextConfig(**clip_config)
-clip = CLIPTextModel(clip_text_config)
+clip = CLIPTextModel()
 clip.load_state_dict(clip_state_dict)
 
 unet_model_path = "./weights/unet.fp16.safetensors"

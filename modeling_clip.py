@@ -20,7 +20,7 @@ from typing import Optional, Any
 import torch
 from torch import nn
 
-from causal_mask import create_causal_mask
+# from causal_mask import create_causal_mask
 
 
 class QuickGELUActivation(nn.Module):
@@ -74,6 +74,59 @@ class CLIPTextEmbeddings(nn.Module):
 
         return embeddings
 
+
+def sdpa_attention_forward(
+    module: torch.nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    dropout: float = 0.0,
+    scaling: float | None = None,
+    is_causal: bool | None = None,
+    **kwargs,
+) -> tuple[torch.Tensor, None]:
+    # if kwargs.get("output_attentions", False):
+    #     logger.warning_once(
+    #         "`sdpa` attention does not support `output_attentions=True`."
+    #         " Please set your attention to `eager` if you want any of these features."
+    #     )
+    # sdpa_kwargs = {}
+    # if hasattr(module, "num_key_value_groups"):
+    #     if not use_gqa_in_sdpa(attention_mask, key):
+    #         key = repeat_kv(key, module.num_key_value_groups)
+    #         value = repeat_kv(value, module.num_key_value_groups)
+    #     else:
+    #         sdpa_kwargs = {"enable_gqa": True}
+
+    # Instead of relying on the value set in the module directly, we use the is_causal passed in kwargs if it is presented
+    is_causal = is_causal if is_causal is not None else getattr(module, "is_causal", True)
+
+    # SDPA's Flash Attention (and cuDNN) kernels rely on the `is_causal` flag. However, there are certain conditions:
+    # - Not in decoding phase (otherwise we want full attention on the single query token)
+    # - Attention mask is not to be provided (even if it is a causal pattern)
+    # - Internally, we marked this as compatible with causal, i.e. it is a decoder attention type
+    #
+    # Quirks on the conditionals:
+    # - We avoid inline passing this to the SDPA function directly to support both torch.compile's dynamic shapes and
+    #   full graph options. Otherwise, dynamic shapes are prevented from compiling.
+    # - It is important to check first for the shape, otherwise compile will fail with
+    #   `argument 'is_causal' must be bool, not SymBool`.
+    is_causal = query.shape[2] > 1 and attention_mask is None and is_causal
+
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+        query,
+        key,
+        value,
+        attn_mask=attention_mask,
+        dropout_p=dropout,
+        scale=scaling,
+        is_causal=is_causal,
+        # **sdpa_kwargs,
+    )
+    attn_output = attn_output.transpose(1, 2).contiguous()
+
+    return attn_output, None
 
 def eager_attention_forward(
     module: nn.Module,
@@ -139,7 +192,8 @@ class CLIPAttention(nn.Module):
         keys = keys.view(batch_size, seq_length, -1, self.head_dim).transpose(1, 2)
         values = values.view(batch_size, seq_length, -1, self.head_dim).transpose(1, 2)
 
-        attention_interface: Callable = eager_attention_forward
+        # attention_interface: Callable = eager_attention_forward
+        attention_interface: Callable = sdpa_attention_forward
         # if self.config._attn_implementation != "eager":
         #     attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
@@ -292,6 +346,7 @@ class CLIPTextTransformer(nn.Module):
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
+        # attn mask must be -> (batch, heads or 1, q_len, kv_len)
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
         **kwargs: Any,
@@ -304,14 +359,20 @@ class CLIPTextTransformer(nn.Module):
 
         hidden_states = self.embeddings(input_ids=input_ids, position_ids=position_ids)
 
+        print("hidden_states.shape")
+        print(hidden_states.shape)
+
+        if attention_mask is not None:
+            print("attention_mask.shape")
+            print(attention_mask.shape)
         # causal mask takes config
-        attention_mask = create_causal_mask(
-            # config=self.config,
-            input_embeds=hidden_states,
-            attention_mask=attention_mask,
-            cache_position=torch.arange(hidden_states.shape[1], device=hidden_states.device),
-            past_key_values=None,
-        )
+        # attention_mask = create_causal_mask(
+        #     # config=self.config,
+        #     input_embeds=hidden_states,
+        #     attention_mask=attention_mask,
+        #     cache_position=torch.arange(hidden_states.shape[1], device=hidden_states.device),
+        #     past_key_values=None,
+        # )
 
         kwargs.pop("is_causal", None)
         encoder_last_hidden_state = self.encoder(
@@ -321,7 +382,13 @@ class CLIPTextTransformer(nn.Module):
             **kwargs,
         )
 
+        print("encoder_last_hidden_state.shape")
+        print(encoder_last_hidden_state.shape)
+
         last_hidden_state = self.final_layer_norm(encoder_last_hidden_state)
+
+        print("last_hidden_state.shape")
+        print(last_hidden_state.shape)
 
         if self.eos_token_id == 2:
             # The `eos_token_id` was incorrect before PR #24773: Let's keep what have been done here.
@@ -348,7 +415,7 @@ class CLIPTextTransformer(nn.Module):
         last_hidden_state=last_hidden_state
         pooler_output=pooled_output
 
-        last_hidden_state, pooler_output
+        return last_hidden_state, pooler_output
 
 
 class CLIPTextModel(CLIPPreTrainedModel):
@@ -360,7 +427,7 @@ class CLIPTextModel(CLIPPreTrainedModel):
         super().__init__()
         self.text_model = CLIPTextTransformer()
         # Initialize weights and apply final processing
-        self.post_init()
+        # self.post_init()
 
     def get_input_embeddings(self) -> nn.Module:
         return self.text_model.embeddings.token_embedding
