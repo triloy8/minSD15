@@ -15,38 +15,21 @@
 """PyTorch CLIP model."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 import torch
 from torch import nn
 
 from activations import ACT2FN
 from masking_utils import create_causal_mask
-from modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling, ImageClassifierOutput
+from modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling
 from modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from processing_utils import Unpack
 from generic import (
-    ModelOutput,
     TransformersKwargs,
     check_model_inputs,
-    can_return_tuple,
-    filter_out_non_signature_kwargs,
-    torch_int,
 )
 from configuration_clip import CLIPConfig, CLIPTextConfig, CLIPVisionConfig
-
-
-# contrastive loss function, adapted from
-# https://sachinruk.github.io/blog/2021-03-07-clip.html
-def contrastive_loss(logits: torch.Tensor) -> torch.Tensor:
-    return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device))
-
-
-def clip_loss(similarity: torch.Tensor) -> torch.Tensor:
-    caption_loss = contrastive_loss(similarity)
-    image_loss = contrastive_loss(similarity.t())
-    return (caption_loss + image_loss) / 2.0
 
 
 class CLIPTextEmbeddings(nn.Module):
