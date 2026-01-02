@@ -15,21 +15,16 @@
 """PyTorch CLIP model."""
 
 from collections.abc import Callable
-from typing import Optional, Union
+from typing import Optional, Any
 
 import torch
 from torch import nn
 
 from activations import ACT2FN
-from masking_utils import create_causal_mask
+from causal_mask import create_causal_mask
+from configuration_clip import CLIPConfig, CLIPTextConfig
+
 from modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling
-from modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
-from processing_utils import Unpack
-from generic import (
-    TransformersKwargs,
-    check_model_inputs,
-)
-from configuration_clip import CLIPConfig, CLIPTextConfig, CLIPVisionConfig
 
 
 class CLIPTextEmbeddings(nn.Module):
@@ -80,7 +75,7 @@ def eager_attention_forward(
     attention_mask: Optional[torch.Tensor],
     scaling: float,
     dropout: float = 0.0,
-    **kwargs: Unpack[TransformersKwargs],
+    **kwargs: Any,
 ):
     attn_weights = torch.matmul(query, key.transpose(-1, -2)) * scaling
     if attention_mask is not None:
@@ -96,7 +91,7 @@ def eager_attention_forward(
 class CLIPAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: Union[CLIPVisionConfig, CLIPTextConfig]):
+    def __init__(self, config: CLIPTextConfig):
         super().__init__()
         self.config = config
         self.embed_dim = config.hidden_size
@@ -120,7 +115,7 @@ class CLIPAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        **kwargs: Unpack[TransformersKwargs],
+        **kwargs: Any,
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         """Input shape: Batch x Time x Channel"""
 
@@ -135,8 +130,8 @@ class CLIPAttention(nn.Module):
         values = values.view(batch_size, seq_length, -1, self.head_dim).transpose(1, 2)
 
         attention_interface: Callable = eager_attention_forward
-        if self.config._attn_implementation != "eager":
-            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+        # if self.config._attn_implementation != "eager":
+        #     attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
         attn_output, attn_weights = attention_interface(
             self,
@@ -170,8 +165,8 @@ class CLIPMLP(nn.Module):
         return hidden_states
 
 
-class CLIPEncoderLayer(torch.nn.Module):
-    def __init__(self, config: Union[CLIPVisionConfig, CLIPTextConfig]):
+class CLIPEncoderLayer(nn.Module):
+    def __init__(self, config: CLIPTextConfig):
         super().__init__()
         self.embed_dim = config.hidden_size
         self.self_attn = CLIPAttention(config)
@@ -183,7 +178,7 @@ class CLIPEncoderLayer(torch.nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
-        **kwargs: Unpack[TransformersKwargs],
+        **kwargs: Any,
     ) -> torch.FloatTensor:
         residual = hidden_states
 
@@ -203,7 +198,7 @@ class CLIPEncoderLayer(torch.nn.Module):
         return hidden_states
 
 
-class CLIPPreTrainedModel(PreTrainedModel):
+class CLIPPreTrainedModel(nn.Module):
     config: CLIPConfig
     base_model_prefix = "clip"
     input_modalities = ("image", "text")
@@ -237,7 +232,7 @@ class CLIPEncoder(nn.Module):
         self,
         inputs_embeds,
         attention_mask: Optional[torch.Tensor] = None,
-        **kwargs: Unpack[TransformersKwargs],
+        **kwargs: Any,
     ) -> BaseModelOutput:
         r"""
         Args:
@@ -283,7 +278,7 @@ class CLIPTextTransformer(nn.Module):
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
-        **kwargs: Unpack[TransformersKwargs],
+        **kwargs: Any,
     ) -> BaseModelOutputWithPooling:
         if input_ids is None:
             raise ValueError("You have to specify input_ids")
@@ -358,13 +353,13 @@ class CLIPTextModel(CLIPPreTrainedModel):
     def set_input_embeddings(self, value):
         self.text_model.embeddings.token_embedding = value
 
-    @check_model_inputs(tie_last_hidden_states=False)
+    # @check_model_inputs(tie_last_hidden_states=False)
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
-        **kwargs: Unpack[TransformersKwargs],
+        **kwargs: Any,
     ) -> BaseModelOutputWithPooling:
         r"""
         Examples:
@@ -391,11 +386,6 @@ class CLIPTextModel(CLIPPreTrainedModel):
 
 
 __all__ = [
-    "CLIPModel",
     "CLIPPreTrainedModel",
     "CLIPTextModel",
-    "CLIPTextModelWithProjection",
-    "CLIPVisionModel",
-    "CLIPVisionModelWithProjection",
-    "CLIPForImageClassification",
 ]
