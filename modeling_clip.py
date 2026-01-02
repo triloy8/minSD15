@@ -21,10 +21,8 @@ from typing import Any, Optional, Union
 import torch
 from torch import nn
 
-from . import initialization as init
 from activations import ACT2FN
 from masking_utils import create_causal_mask
-from modeling_layers import GradientCheckpointingLayer
 from modeling_outputs import BaseModelOutput, BaseModelOutputWithPooling, ImageClassifierOutput
 from modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
 from processing_utils import Unpack
@@ -345,7 +343,7 @@ class CLIPMLP(nn.Module):
         return hidden_states
 
 
-class CLIPEncoderLayer(GradientCheckpointingLayer):
+class CLIPEncoderLayer(torch.nn.Module):
     def __init__(self, config: Union[CLIPVisionConfig, CLIPTextConfig]):
         super().__init__()
         self.embed_dim = config.hidden_size
@@ -391,65 +389,6 @@ class CLIPPreTrainedModel(PreTrainedModel):
         "hidden_states": CLIPEncoderLayer,
         "attentions": CLIPAttention,
     }
-
-    @torch.no_grad()
-    def _init_weights(self, module):
-        """Initialize the weights"""
-        factor = self.config.initializer_factor
-        if isinstance(module, CLIPTextEmbeddings):
-            init.normal_(module.token_embedding.weight, mean=0.0, std=factor * 0.02)
-            init.normal_(module.position_embedding.weight, mean=0.0, std=factor * 0.02)
-            init.copy_(module.position_ids, torch.arange(module.position_ids.shape[-1]).expand((1, -1)))
-        elif isinstance(module, CLIPVisionEmbeddings):
-            factor = self.config.initializer_factor
-            init.normal_(module.class_embedding, mean=0.0, std=module.embed_dim**-0.5 * factor)
-            init.normal_(module.patch_embedding.weight, std=module.config.initializer_range * factor)
-            init.normal_(module.position_embedding.weight, std=module.config.initializer_range * factor)
-            init.copy_(module.position_ids, torch.arange(module.num_positions).expand((1, -1)))
-        elif isinstance(module, CLIPAttention):
-            factor = self.config.initializer_factor
-            in_proj_std = (module.embed_dim**-0.5) * ((2 * module.config.num_hidden_layers) ** -0.5) * factor
-            out_proj_std = (module.embed_dim**-0.5) * factor
-            init.normal_(module.q_proj.weight, std=in_proj_std)
-            init.normal_(module.k_proj.weight, std=in_proj_std)
-            init.normal_(module.v_proj.weight, std=in_proj_std)
-            init.normal_(module.out_proj.weight, std=out_proj_std)
-        elif isinstance(module, CLIPMLP):
-            factor = self.config.initializer_factor
-            in_proj_std = (module.config.hidden_size**-0.5) * ((2 * module.config.num_hidden_layers) ** -0.5) * factor
-            fc_std = (2 * module.config.hidden_size) ** -0.5 * factor
-            init.normal_(module.fc1.weight, std=fc_std)
-            init.normal_(module.fc2.weight, std=in_proj_std)
-        elif isinstance(module, CLIPModel):
-            init.normal_(
-                module.text_projection.weight,
-                std=module.text_embed_dim**-0.5 * self.config.initializer_factor,
-            )
-            init.normal_(
-                module.visual_projection.weight,
-                std=module.vision_embed_dim**-0.5 * self.config.initializer_factor,
-            )
-        elif isinstance(module, CLIPVisionModelWithProjection):
-            init.normal_(
-                module.visual_projection.weight,
-                std=self.config.hidden_size**-0.5 * self.config.initializer_factor,
-            )
-        elif isinstance(module, CLIPTextModelWithProjection):
-            init.normal_(
-                module.text_projection.weight,
-                std=self.config.hidden_size**-0.5 * self.config.initializer_factor,
-            )
-        elif isinstance(module, CLIPForImageClassification):
-            init.normal_(
-                module.classifier.weight,
-                std=self.config.vision_config.hidden_size**-0.5 * self.config.initializer_factor,
-            )
-
-        if isinstance(module, nn.LayerNorm):
-            init.zeros_(module.bias)
-            init.ones_(module.weight)
-        if isinstance(module, nn.Linear) and module.bias is not None:
-            init.zeros_(module.bias)
 
 
 class CLIPEncoder(nn.Module):
