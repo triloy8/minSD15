@@ -16,52 +16,6 @@ import torch
 from torch import nn
 
 
-def sdpa_attention_forward(
-    module: torch.nn.Module,
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    attention_mask: torch.Tensor | None,
-    dropout: float = 0.0,
-    scaling: float | None = None,
-    is_causal: bool | None = None,
-) -> tuple[torch.Tensor, None]:
-
-    # Instead of relying on the value set in the module directly, we use the is_causal passed in kwargs if it is presented
-    is_causal = is_causal if is_causal is not None else getattr(module, "is_causal", True)
-    # print("is_causal")
-    # print(is_causal)
-
-    # SDPA's Flash Attention (and cuDNN) kernels rely on the `is_causal` flag. However, there are certain conditions:
-    # - Not in decoding phase (otherwise we want full attention on the single query token)
-    # - Attention mask is not to be provided (even if it is a causal pattern)
-    # - Internally, we marked this as compatible with causal, i.e. it is a decoder attention type
-    #
-    # Quirks on the conditionals:
-    # - We avoid inline passing this to the SDPA function directly to support both torch.compile's dynamic shapes and
-    #   full graph options. Otherwise, dynamic shapes are prevented from compiling.
-    # - It is important to check first for the shape, otherwise compile will fail with
-    #   `argument 'is_causal' must be bool, not SymBool`.
-    is_causal = query.shape[2] > 1 and attention_mask is None and is_causal
-
-    # print("is_causal")
-    # print(is_causal)
-
-    attn_output = torch.nn.functional.scaled_dot_product_attention(
-        query,
-        key,
-        value,
-        attn_mask=attention_mask,
-        dropout_p=dropout,
-        scale=scaling,
-        is_causal=is_causal,
-        # **sdpa_kwargs,
-    )
-    attn_output = attn_output.transpose(1, 2).contiguous()
-
-    return attn_output, None
-
-
 class QuickGELUActivation(nn.Module):
     """
     Applies GELU approximation that is fast but somewhat inaccurate. See: https://github.com/hendrycks/GELUs
@@ -135,7 +89,7 @@ class CLIPAttention(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         is_causal: bool | None = None,
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+    ) -> torch.Tensor:
 
         batch_size, seq_length, embed_dim = hidden_states.shape
 
@@ -147,20 +101,21 @@ class CLIPAttention(nn.Module):
         keys = keys.view(batch_size, seq_length, -1, self.head_dim).transpose(1, 2)
         values = values.view(batch_size, seq_length, -1, self.head_dim).transpose(1, 2)
 
-        attn_output, attn_weights = sdpa_attention_forward(
-            self,
+        attn_output = torch.nn.functional.scaled_dot_product_attention(
             queries,
             keys,
             values,
-            attention_mask,
-            scaling=self.scale,
+            attn_mask=attention_mask,
+            dropout_p=0.0,
+            scale=self.scale,
             is_causal=is_causal,
         )
+        attn_output = attn_output.transpose(1, 2).contiguous()
 
         attn_output = attn_output.reshape(batch_size, seq_length, -1).contiguous()
         attn_output = self.out_proj(attn_output)
 
-        return attn_output, attn_weights
+        return attn_output
 
 
 class CLIPMLP(nn.Module):
@@ -201,7 +156,7 @@ class CLIPEncoderLayer(nn.Module):
         residual = hidden_states
 
         hidden_states = self.layer_norm1(hidden_states)
-        hidden_states, _ = self.self_attn(
+        hidden_states = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             is_causal=is_causal,
@@ -277,12 +232,6 @@ class CLIPTextTransformer(nn.Module):
 
         last_hidden_state = self.final_layer_norm(encoder_last_hidden_state)
 
-        # The `eos_token_id` was incorrect before PR #24773: Let's keep what have been done here.
-        # A CLIP model with such `eos_token_id` in the config can't work correctly with extra new tokens added
-        # ------------------------------------------------------------
-        # text_embeds.shape = [batch_size, sequence_length, transformer.width]
-        # take features from the eot embedding (eot_token is the highest number in each sequence)
-        # casting to torch.int for onnx compatibility: argmax doesn't support int64 inputs with opset 14
         pooled_output = last_hidden_state[
             torch.arange(last_hidden_state.shape[0], device=last_hidden_state.device),
             input_ids.to(dtype=torch.int, device=last_hidden_state.device).argmax(dim=-1),
