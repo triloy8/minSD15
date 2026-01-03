@@ -1,6 +1,6 @@
 # Motivation
 
-This project is a minimal, educational re‑implementation of the Stable Diffusion 1.5 sampling pipeline. I use HuggingFace Diffusers as a reference, then strip away all the extra convenience layers. The aim is simplicity and **NOT** API compatibility with Diffusers.
+This project is a minimal, educational re‑implementation of the Stable Diffusion 1.5 sampling pipeline. I use HuggingFace Diffusers as a reference, then strip away all the extra convenience layers.
 
 # Usage
 
@@ -11,10 +11,12 @@ Make sure to have [`uv`](https://github.com/astral-sh/uv) installed and just use
 
 # Components
 
-* **Pipeline skeleton** – deconstructed the Diffusers pipeline
-* **min SD 1.5 UNet** – adapted from the open‑source SDXL UNet rewrite at [cloneofsimo/minSDXL](https://github.com/cloneofsimo/minSDXL). Tweaked to load and run SD 1.5 HuggingFace checkpoints.
-* **Minimal scheduler** – a lean re‑implementation of Diffusers’ `EulerDiscreteScheduler`. 
-* **Borrowed modules** – CLIP text encoder and VAE decoder are pulled straight from Diffusers to keep the focus on sampling logic.
+- **Pipeline skeleton** — done (deconstructed Diffusers pipeline)
+- **UNet (SD 1.5)** — done (adapted from minSDXL)
+- **CLIP text encoder** — done (adapted from Transformers)
+- **Scheduler (Euler)** — done (adapted from Diffusers)
+- **VAE decoder** — not done
+- **CLIP tokenizer** — not done
 
 # Diffusion theory
 
