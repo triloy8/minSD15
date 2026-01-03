@@ -1,18 +1,14 @@
-# coding=utf-8
-# Copyright 2021 The OpenAI Team Authors and The HuggingFace Team. All rights reserved.
+# Copyright 2025 HuggingFace Inc.
+# Further Modifications Copyright 2025 triloy8
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# SPDX-License-Identifier: Apache-2.0
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+# Provenance:
+#   • Original file:
+#       https://github.com/huggingface/transformers
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""PyTorch CLIP model."""
+# Changes by triloy8:
+#   • Left only CLIPTextModel w/ SD1.5 config
 
 from collections.abc import Callable
 from typing import Optional, Any
@@ -20,7 +16,52 @@ from typing import Optional, Any
 import torch
 from torch import nn
 
-# from causal_mask import create_causal_mask
+
+def sdpa_attention_forward(
+    module: torch.nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    dropout: float = 0.0,
+    scaling: float | None = None,
+    is_causal: bool | None = None,
+    **kwargs,
+) -> tuple[torch.Tensor, None]:
+    
+    # Instead of relying on the value set in the module directly, we use the is_causal passed in kwargs if it is presented
+    is_causal = is_causal if is_causal is not None else getattr(module, "is_causal", True)
+    # print("is_causal")
+    # print(is_causal)
+
+    # SDPA's Flash Attention (and cuDNN) kernels rely on the `is_causal` flag. However, there are certain conditions:
+    # - Not in decoding phase (otherwise we want full attention on the single query token)
+    # - Attention mask is not to be provided (even if it is a causal pattern)
+    # - Internally, we marked this as compatible with causal, i.e. it is a decoder attention type
+    #
+    # Quirks on the conditionals:
+    # - We avoid inline passing this to the SDPA function directly to support both torch.compile's dynamic shapes and
+    #   full graph options. Otherwise, dynamic shapes are prevented from compiling.
+    # - It is important to check first for the shape, otherwise compile will fail with
+    #   `argument 'is_causal' must be bool, not SymBool`.
+    is_causal = query.shape[2] > 1 and attention_mask is None and is_causal
+
+    # print("is_causal")
+    # print(is_causal)
+
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+        query,
+        key,
+        value,
+        attn_mask=attention_mask,
+        dropout_p=dropout,
+        scale=scaling,
+        is_causal=is_causal,
+        # **sdpa_kwargs,
+    )
+    attn_output = attn_output.transpose(1, 2).contiguous()
+
+    return attn_output, None
 
 
 class QuickGELUActivation(nn.Module):
@@ -34,17 +75,13 @@ class QuickGELUActivation(nn.Module):
 class CLIPTextEmbeddings(nn.Module):
     def __init__(self):
         super().__init__()
-        # config.hidden_size
         embed_dim = 768
 
-        # config.vocab_size
         self.token_embedding = nn.Embedding(49408, embed_dim)
-        # config.max_position_embeddings
         self.position_embedding = nn.Embedding(77, embed_dim)
 
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
         self.register_buffer(
-            # config.max_position_embeddings -> 77
             "position_ids", torch.arange(77).expand((1, -1)), persistent=False
         )
 
@@ -54,6 +91,7 @@ class CLIPTextEmbeddings(nn.Module):
         position_ids: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
     ) -> torch.Tensor:
+        
         seq_length = input_ids.shape[-1] if input_ids is not None else inputs_embeds.shape[-2]
         max_position_embedding = self.position_embedding.weight.shape[0]
 
@@ -75,88 +113,10 @@ class CLIPTextEmbeddings(nn.Module):
         return embeddings
 
 
-def sdpa_attention_forward(
-    module: torch.nn.Module,
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    attention_mask: torch.Tensor | None,
-    dropout: float = 0.0,
-    scaling: float | None = None,
-    is_causal: bool | None = None,
-    **kwargs,
-) -> tuple[torch.Tensor, None]:
-    # if kwargs.get("output_attentions", False):
-    #     logger.warning_once(
-    #         "`sdpa` attention does not support `output_attentions=True`."
-    #         " Please set your attention to `eager` if you want any of these features."
-    #     )
-    # sdpa_kwargs = {}
-    # if hasattr(module, "num_key_value_groups"):
-    #     if not use_gqa_in_sdpa(attention_mask, key):
-    #         key = repeat_kv(key, module.num_key_value_groups)
-    #         value = repeat_kv(value, module.num_key_value_groups)
-    #     else:
-    #         sdpa_kwargs = {"enable_gqa": True}
-
-    # Instead of relying on the value set in the module directly, we use the is_causal passed in kwargs if it is presented
-    is_causal = is_causal if is_causal is not None else getattr(module, "is_causal", True)
-
-    # SDPA's Flash Attention (and cuDNN) kernels rely on the `is_causal` flag. However, there are certain conditions:
-    # - Not in decoding phase (otherwise we want full attention on the single query token)
-    # - Attention mask is not to be provided (even if it is a causal pattern)
-    # - Internally, we marked this as compatible with causal, i.e. it is a decoder attention type
-    #
-    # Quirks on the conditionals:
-    # - We avoid inline passing this to the SDPA function directly to support both torch.compile's dynamic shapes and
-    #   full graph options. Otherwise, dynamic shapes are prevented from compiling.
-    # - It is important to check first for the shape, otherwise compile will fail with
-    #   `argument 'is_causal' must be bool, not SymBool`.
-    is_causal = query.shape[2] > 1 and attention_mask is None and is_causal
-
-    attn_output = torch.nn.functional.scaled_dot_product_attention(
-        query,
-        key,
-        value,
-        attn_mask=attention_mask,
-        dropout_p=dropout,
-        scale=scaling,
-        is_causal=is_causal,
-        # **sdpa_kwargs,
-    )
-    attn_output = attn_output.transpose(1, 2).contiguous()
-
-    return attn_output, None
-
-def eager_attention_forward(
-    module: nn.Module,
-    query: torch.Tensor,
-    key: torch.Tensor,
-    value: torch.Tensor,
-    attention_mask: Optional[torch.Tensor],
-    scaling: float,
-    dropout: float = 0.0,
-    **kwargs: Any,
-):
-    attn_weights = torch.matmul(query, key.transpose(-1, -2)) * scaling
-    if attention_mask is not None:
-        attn_weights = attn_weights + attention_mask
-    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
-    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
-
-    attn_output = torch.matmul(attn_weights, value)
-    attn_output = attn_output.transpose(1, 2).contiguous()
-    return attn_output, attn_weights
-
-
 class CLIPAttention(nn.Module):
-    """Multi-headed attention from 'Attention Is All You Need' paper"""
-
     def __init__(self,):
         super().__init__()
-        # config.hidden_size
         self.embed_dim = 768
-        # config.num_attention_heads
         self.num_heads = 12
         self.head_dim = self.embed_dim // self.num_heads
         if self.head_dim * self.num_heads != self.embed_dim:
@@ -180,7 +140,6 @@ class CLIPAttention(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-        """Input shape: Batch x Time x Channel"""
 
         batch_size, seq_length, embed_dim = hidden_states.shape
 
@@ -192,12 +151,7 @@ class CLIPAttention(nn.Module):
         keys = keys.view(batch_size, seq_length, -1, self.head_dim).transpose(1, 2)
         values = values.view(batch_size, seq_length, -1, self.head_dim).transpose(1, 2)
 
-        # attention_interface: Callable = eager_attention_forward
-        attention_interface: Callable = sdpa_attention_forward
-        # if self.config._attn_implementation != "eager":
-        #     attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
-
-        attn_output, attn_weights = attention_interface(
+        attn_output, attn_weights = sdpa_attention_forward(
             self,
             queries,
             keys,
@@ -217,30 +171,26 @@ class CLIPAttention(nn.Module):
 class CLIPMLP(nn.Module):
     def __init__(self):
         super().__init__()
-        # config.hidden_act
         self.activation_fn = QuickGELUActivation()
-        # config.hidden_size, config.intermediate_size
         self.fc1 = nn.Linear(768, 3072)
-        # config.intermediate_size, config.hidden_size
         self.fc2 = nn.Linear(3072, 768)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        
         hidden_states = self.fc1(hidden_states)
         hidden_states = self.activation_fn(hidden_states)
         hidden_states = self.fc2(hidden_states)
+        
         return hidden_states
 
 
 class CLIPEncoderLayer(nn.Module):
     def __init__(self):
         super().__init__()
-        # config.hidden_size
         self.embed_dim = 768
         self.self_attn = CLIPAttention()
-        # config.layer_norm_eps
         self.layer_norm1 = nn.LayerNorm(self.embed_dim, eps=1e-05)
         self.mlp = CLIPMLP()
-        # config.layer_norm_eps
         self.layer_norm2 = nn.LayerNorm(self.embed_dim, eps=1e-05)
 
     def forward(
@@ -249,6 +199,7 @@ class CLIPEncoderLayer(nn.Module):
         attention_mask: torch.Tensor,
         **kwargs: Any,
     ) -> torch.FloatTensor:
+        
         residual = hidden_states
 
         hidden_states = self.layer_norm1(hidden_states)
@@ -267,32 +218,9 @@ class CLIPEncoderLayer(nn.Module):
         return hidden_states
 
 
-class CLIPPreTrainedModel(nn.Module):
-    base_model_prefix = "clip"
-    input_modalities = ("image", "text")
-    supports_gradient_checkpointing = True
-    _supports_sdpa = True
-    _supports_flash_attn = True
-    _supports_flex_attn = True
-    _supports_attention_backend = True
-    _can_record_outputs = {
-        "hidden_states": CLIPEncoderLayer,
-        "attentions": CLIPAttention,
-    }
-
-
 class CLIPEncoder(nn.Module):
-    """
-    Transformer encoder consisting of `config.num_hidden_layers` self attention layers. Each layer is a
-    [`CLIPEncoderLayer`].
-
-    Args:
-        config: CLIPConfig
-    """
-
     def __init__(self):
         super().__init__()
-        # config.num_hidden_layers
         self.layers = nn.ModuleList([CLIPEncoderLayer() for _ in range(12)])
         self.gradient_checkpointing = False
 
@@ -302,20 +230,7 @@ class CLIPEncoder(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> torch.Tensor:
-        r"""
-        Args:
-            inputs_embeds (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
-                Optionally, instead of passing `input_ids` you can choose to directly pass an embedded representation.
-                This is useful if you want more control over how to convert `input_ids` indices into associated vectors
-                than the model's internal embedding lookup matrix.
-            attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
-                Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
-
-                - 1 for tokens that are **not masked**,
-                - 0 for tokens that are **masked**.
-
-                [What are attention masks?](../glossary#attention-mask)
-        """
+        
         hidden_states = inputs_embeds
         for encoder_layer in self.layers:
             hidden_states = encoder_layer(
@@ -332,15 +247,12 @@ class CLIPEncoder(nn.Module):
 class CLIPTextTransformer(nn.Module):
     def __init__(self):
         super().__init__()
-        # config.hidden_size
         embed_dim = 768
         self.embeddings = CLIPTextEmbeddings()
         self.encoder = CLIPEncoder()
-        # config.layer_norm_eps
         self.final_layer_norm = nn.LayerNorm(embed_dim, eps=1e-05)
 
         # For `pooled_output` computation
-        # config.eos_token_id
         self.eos_token_id = 2
 
     def forward(
@@ -351,6 +263,7 @@ class CLIPTextTransformer(nn.Module):
         position_ids: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> Any:
+        
         if input_ids is None:
             raise ValueError("You have to specify input_ids")
 
@@ -358,21 +271,6 @@ class CLIPTextTransformer(nn.Module):
         input_ids = input_ids.view(-1, input_shape[-1])
 
         hidden_states = self.embeddings(input_ids=input_ids, position_ids=position_ids)
-
-        print("hidden_states.shape")
-        print(hidden_states.shape)
-
-        if attention_mask is not None:
-            print("attention_mask.shape")
-            print(attention_mask.shape)
-        # causal mask takes config
-        # attention_mask = create_causal_mask(
-        #     # config=self.config,
-        #     input_embeds=hidden_states,
-        #     attention_mask=attention_mask,
-        #     cache_position=torch.arange(hidden_states.shape[1], device=hidden_states.device),
-        #     past_key_values=None,
-        # )
 
         kwargs.pop("is_causal", None)
         encoder_last_hidden_state = self.encoder(
@@ -382,35 +280,18 @@ class CLIPTextTransformer(nn.Module):
             **kwargs,
         )
 
-        print("encoder_last_hidden_state.shape")
-        print(encoder_last_hidden_state.shape)
-
         last_hidden_state = self.final_layer_norm(encoder_last_hidden_state)
 
-        print("last_hidden_state.shape")
-        print(last_hidden_state.shape)
-
-        if self.eos_token_id == 2:
-            # The `eos_token_id` was incorrect before PR #24773: Let's keep what have been done here.
-            # A CLIP model with such `eos_token_id` in the config can't work correctly with extra new tokens added
-            # ------------------------------------------------------------
-            # text_embeds.shape = [batch_size, sequence_length, transformer.width]
-            # take features from the eot embedding (eot_token is the highest number in each sequence)
-            # casting to torch.int for onnx compatibility: argmax doesn't support int64 inputs with opset 14
-            pooled_output = last_hidden_state[
-                torch.arange(last_hidden_state.shape[0], device=last_hidden_state.device),
-                input_ids.to(dtype=torch.int, device=last_hidden_state.device).argmax(dim=-1),
-            ]
-        else:
-            # The config gets updated `eos_token_id` from PR #24773 (so the use of extra new tokens is possible)
-            pooled_output = last_hidden_state[
-                torch.arange(last_hidden_state.shape[0], device=last_hidden_state.device),
-                # We need to get the first position of `eos_token_id` value (`pad_token_ids` might equal to `eos_token_id`)
-                # Note: we assume each sequence (along batch dim.) contains an  `eos_token_id` (e.g. prepared by the tokenizer)
-                (input_ids.to(dtype=torch.int, device=last_hidden_state.device) == self.eos_token_id)
-                .int()
-                .argmax(dim=-1),
-            ]
+        # The `eos_token_id` was incorrect before PR #24773: Let's keep what have been done here.
+        # A CLIP model with such `eos_token_id` in the config can't work correctly with extra new tokens added
+        # ------------------------------------------------------------
+        # text_embeds.shape = [batch_size, sequence_length, transformer.width]
+        # take features from the eot embedding (eot_token is the highest number in each sequence)
+        # casting to torch.int for onnx compatibility: argmax doesn't support int64 inputs with opset 14
+        pooled_output = last_hidden_state[
+            torch.arange(last_hidden_state.shape[0], device=last_hidden_state.device),
+            input_ids.to(dtype=torch.int, device=last_hidden_state.device).argmax(dim=-1),
+        ]
 
         last_hidden_state=last_hidden_state
         pooler_output=pooled_output
@@ -418,24 +299,11 @@ class CLIPTextTransformer(nn.Module):
         return last_hidden_state, pooler_output
 
 
-class CLIPTextModel(CLIPPreTrainedModel):
-    input_modalities = ("text",)
-
-    _no_split_modules = ["CLIPTextEmbeddings", "CLIPEncoderLayer"]
-
+class CLIPTextModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.text_model = CLIPTextTransformer()
-        # Initialize weights and apply final processing
-        # self.post_init()
 
-    def get_input_embeddings(self) -> nn.Module:
-        return self.text_model.embeddings.token_embedding
-
-    def set_input_embeddings(self, value):
-        self.text_model.embeddings.token_embedding = value
-
-    # @check_model_inputs(tie_last_hidden_states=False)
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
@@ -443,21 +311,6 @@ class CLIPTextModel(CLIPPreTrainedModel):
         position_ids: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> Any:
-        r"""
-        Examples:
-
-        ```python
-        >>> from transformers import AutoTokenizer, CLIPTextModel
-
-        >>> model = CLIPTextModel.from_pretrained("openai/clip-vit-base-patch32")
-        >>> tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch32")
-
-        >>> inputs = tokenizer(["a photo of a cat", "a photo of a dog"], padding=True, return_tensors="pt")
-
-        >>> outputs = model(**inputs)
-        >>> last_hidden_state = outputs.last_hidden_state
-        >>> pooled_output = outputs.pooler_output  # pooled (EOS token) states
-        ```"""
 
         # last_hidden_state, pooler_output
         return self.text_model(
@@ -466,9 +319,3 @@ class CLIPTextModel(CLIPPreTrainedModel):
             position_ids=position_ids,
             **kwargs,
         )
-
-
-__all__ = [
-    "CLIPPreTrainedModel",
-    "CLIPTextModel",
-]

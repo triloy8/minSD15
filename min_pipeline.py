@@ -52,7 +52,6 @@ if not all(path.exists() for path in expected_artifacts):
 #####################################################################
 
 clip_tokenizer_config = json.load(open(str("./config/tokenizer/tokenizer_config.json")))
-clip_config = json.load(open("./config/clip_config.json"))
 vae_config = json.load(open("./config/vae_config.json"))
 
 scheduler = EulerDiscreteScheduler()
@@ -64,7 +63,6 @@ clip_tokenizer = CLIPTokenizer(clip_tokenizer_vocab_path, clip_tokenizer_merges_
 clip_model_path = "./weights/clip.fp16.safetensors"
 clip_state_dict = load_file(clip_model_path)
 clip_state_dict.pop("text_model.embeddings.position_ids")
-clip_text_config = CLIPTextConfig(**clip_config)
 clip = CLIPTextModel()
 clip.load_state_dict(clip_state_dict)
 

@@ -5,3 +5,4 @@ weights/*
 output/*
 *.png
 .venv
+todo/
