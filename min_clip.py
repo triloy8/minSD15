@@ -10,8 +10,7 @@
 # Changes by triloy8:
 #   • Left only CLIPTextModel w/ SD1.5 config
 
-from collections.abc import Callable
-from typing import Optional, Any
+from typing import Optional, Tuple
 
 import torch
 from torch import nn
@@ -26,9 +25,8 @@ def sdpa_attention_forward(
     dropout: float = 0.0,
     scaling: float | None = None,
     is_causal: bool | None = None,
-    **kwargs,
 ) -> tuple[torch.Tensor, None]:
-    
+
     # Instead of relying on the value set in the module directly, we use the is_causal passed in kwargs if it is presented
     is_causal = is_causal if is_causal is not None else getattr(module, "is_causal", True)
     # print("is_causal")
@@ -125,8 +123,6 @@ class CLIPAttention(nn.Module):
                 f" {self.num_heads})."
             )
         self.scale = self.head_dim**-0.5
-        # config.attention_dropout
-        self.dropout =  0.0
         self.is_causal = False
 
         self.k_proj = nn.Linear(self.embed_dim, self.embed_dim)
@@ -138,7 +134,7 @@ class CLIPAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        **kwargs: Any,
+        is_causal: bool | None = None,
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
 
         batch_size, seq_length, embed_dim = hidden_states.shape
@@ -158,8 +154,7 @@ class CLIPAttention(nn.Module):
             values,
             attention_mask,
             scaling=self.scale,
-            dropout=0.0 if not self.training else self.dropout,
-            **kwargs,
+            is_causal=is_causal,
         )
 
         attn_output = attn_output.reshape(batch_size, seq_length, -1).contiguous()
@@ -175,7 +170,10 @@ class CLIPMLP(nn.Module):
         self.fc1 = nn.Linear(768, 3072)
         self.fc2 = nn.Linear(3072, 768)
 
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        hidden_states: torch.Tensor
+    ) -> torch.Tensor:
         
         hidden_states = self.fc1(hidden_states)
         hidden_states = self.activation_fn(hidden_states)
@@ -197,7 +195,7 @@ class CLIPEncoderLayer(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
-        **kwargs: Any,
+        is_causal: bool | None = None,
     ) -> torch.FloatTensor:
         
         residual = hidden_states
@@ -206,7 +204,7 @@ class CLIPEncoderLayer(nn.Module):
         hidden_states, _ = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
-            **kwargs,
+            is_causal=is_causal,
         )
         hidden_states = residual + hidden_states
 
@@ -228,7 +226,7 @@ class CLIPEncoder(nn.Module):
         self,
         inputs_embeds,
         attention_mask: Optional[torch.Tensor] = None,
-        **kwargs: Any,
+        is_causal: bool | None = None,
     ) -> torch.Tensor:
         
         hidden_states = inputs_embeds
@@ -236,7 +234,7 @@ class CLIPEncoder(nn.Module):
             hidden_states = encoder_layer(
                 hidden_states,
                 attention_mask,
-                **kwargs,
+                is_causal,
             )
 
         last_hidden_state=hidden_states
@@ -261,8 +259,7 @@ class CLIPTextTransformer(nn.Module):
         # attn mask must be -> (batch, heads or 1, q_len, kv_len)
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
-        **kwargs: Any,
-    ) -> Any:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         
         if input_ids is None:
             raise ValueError("You have to specify input_ids")
@@ -272,12 +269,10 @@ class CLIPTextTransformer(nn.Module):
 
         hidden_states = self.embeddings(input_ids=input_ids, position_ids=position_ids)
 
-        kwargs.pop("is_causal", None)
         encoder_last_hidden_state = self.encoder(
             inputs_embeds=hidden_states,
             attention_mask=attention_mask,
             is_causal=True,
-            **kwargs,
         )
 
         last_hidden_state = self.final_layer_norm(encoder_last_hidden_state)
@@ -309,13 +304,11 @@ class CLIPTextModel(nn.Module):
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.Tensor] = None,
-        **kwargs: Any,
-    ) -> Any:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
 
         # last_hidden_state, pooler_output
         return self.text_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
-            **kwargs,
         )
