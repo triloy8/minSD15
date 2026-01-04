@@ -9,13 +9,25 @@ Make sure to have [`uv`](https://github.com/astral-sh/uv) installed and just use
   uv run min_pipeline.py
 ```
 
+
+# Gallery
+
+Dog paintings generated with this repo:
+
+![Caravaggio dog](gallery/caravaggio_dog.png)
+![Picasso dog](gallery/picasso_dog.png)
+![Renoir dog](gallery/renoir_dog.png)
+![Rousseau dog](gallery/rousseau_dog.png)
+![Van Gogh dog](gallery/vangogh_dog.png)
+![Basquiat dog](gallery/basquiat_dog.png)
+
 # Components
 
 - **Pipeline skeleton** — done (deconstructed Diffusers pipeline)
 - **UNet (SD 1.5)** — done (adapted from minSDXL)
 - **CLIP text encoder** — done (adapted from Transformers)
 - **Scheduler (Euler)** — done (adapted from Diffusers)
-- **VAE decoder** — not done
+- **VAE decoder** — not done (next on the list)
 - **CLIP tokenizer** — not done
 
 # Diffusion theory
@@ -123,7 +135,3 @@ x_{i+1}
       \Bigr)
 }
 ```
-
-# Things not yet implemented
-
-* Negative prompting

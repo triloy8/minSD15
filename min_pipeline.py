@@ -80,7 +80,7 @@ vae.load_state_dict(vae_state_dict)
 ######################## MODELS TO DEVICE ###########################
 #####################################################################
 
-torch_device = "cuda"
+torch_device = "cuda" if torch.cuda.is_available() else "cpu"
 
 clip.to(torch_device, dtype=torch.float16)
 unet.to(torch_device, dtype=torch.float16)
@@ -90,13 +90,14 @@ vae.to(torch_device, dtype=torch.float16)
 ########################## PIPE PARAMS ##############################
 #####################################################################
 
-prompt = ["a pink dog"]
+prompt = ["painting of a dog by Jean‑Michel Basquiat"]
+negative_prompt = ["bad anatomy, deformed, disfigured, extra limbs, missing limbs, blurry, low quality, lowres, artifacts, text, watermark, logo, jpeg artifacts, out of focus, cropped, duplicate, mutation, ugly"]
 height = 512
 width = 512
-num_inference_steps = 25
-guidance_scale = 7.5
-seed = 3
-generator = torch.cuda.manual_seed(seed)
+num_inference_steps = 30
+guidance_scale = 7
+seed = 2
+torch.cuda.manual_seed(seed)
 batch_size = len(prompt)
 
 #####################################################################
@@ -107,14 +108,15 @@ text_input = clip_tokenizer(
     prompt, padding="max_length", max_length=clip_tokenizer.model_max_length, truncation=True, return_tensors="pt"
 )
 
+negative_text_input = clip_tokenizer(
+    negative_prompt, padding="max_length", max_length=clip_tokenizer.model_max_length, truncation=True, return_tensors="pt"
+)
+
 with torch.no_grad():
     text_embeddings = clip(text_input.input_ids.to(torch_device))[0]
+    negative_text_embeddings = clip(negative_text_input.input_ids.to(torch_device))[0]
 
-max_length = text_input.input_ids.shape[-1]
-uncond_input = clip_tokenizer([""] * batch_size, padding="max_length", max_length=max_length, return_tensors="pt")
-uncond_embeddings = clip(uncond_input.input_ids.to(torch_device))[0]
-
-text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
+text_embeddings = torch.cat([negative_text_embeddings, text_embeddings])
 
 #####################################################################
 ############################# SAMPLING ##############################
@@ -122,7 +124,7 @@ text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
 
 latents = torch.randn(
     (batch_size, unet.in_channels, height // 8, width // 8),
-    generator=generator,
+    generator=None,
     device=torch_device,
     dtype=torch.float16
 )

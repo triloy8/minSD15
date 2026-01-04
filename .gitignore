@@ -3,6 +3,5 @@ __pycache__
 config/*
 weights/*
 output/*
-*.png
 .venv
 todo/
