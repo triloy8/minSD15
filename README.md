@@ -28,6 +28,7 @@ Dog paintings generated with this repo (resized previews):
     <td><img src="gallery/basquiat_dog.png" width="360" alt="Basquiat dog" /></td>
   </tr>
 </table>
+
 # Components
 
 - **Pipeline skeleton** — done (deconstructed Diffusers pipeline)
