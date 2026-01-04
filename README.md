@@ -12,15 +12,22 @@ Make sure to have [`uv`](https://github.com/astral-sh/uv) installed and just use
 
 # Gallery
 
-Dog paintings generated with this repo:
+Dog paintings generated with this repo (resized previews):
 
-![Caravaggio dog](gallery/caravaggio_dog.png)
-![Picasso dog](gallery/picasso_dog.png)
-![Renoir dog](gallery/renoir_dog.png)
-![Rousseau dog](gallery/rousseau_dog.png)
-![Van Gogh dog](gallery/vangogh_dog.png)
-![Basquiat dog](gallery/basquiat_dog.png)
-
+<table>
+  <tr>
+    <td><img src="gallery/caravaggio_dog.png" width="360" alt="Caravaggio dog" /></td>
+    <td><img src="gallery/picasso_dog.png" width="360" alt="Picasso dog" /></td>
+  </tr>
+  <tr>
+    <td><img src="gallery/renoir_dog.png" width="360" alt="Renoir dog" /></td>
+    <td><img src="gallery/rousseau_dog.png" width="360" alt="Rousseau dog" /></td>
+  </tr>
+  <tr>
+    <td><img src="gallery/vangogh_dog.png" width="360" alt="Van Gogh dog" /></td>
+    <td><img src="gallery/basquiat_dog.png" width="360" alt="Basquiat dog" /></td>
+  </tr>
+</table>
 # Components
 
 - **Pipeline skeleton** — done (deconstructed Diffusers pipeline)
