@@ -15,7 +15,7 @@ from huggingface_hub import snapshot_download
 from min_eulerd import EulerDiscreteScheduler
 from min_unet import UNet2DConditionModel
 from min_clip import CLIPTextModel
-from transformers import CLIPTokenizer, CLIPTextConfig
+from transformers import CLIPTokenizer
 import torch
 from safetensors.torch import load_file
 from tqdm.auto import tqdm
