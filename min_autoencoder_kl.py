@@ -1,16 +1,3 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 from typing import Optional, Tuple, Union, List
 import logging
 import torch
@@ -194,35 +181,6 @@ class DiagonalGaussianDistribution(object):
 
 
 class ResnetBlock2D(nn.Module):
-    r"""
-    A Resnet block.
-
-    Parameters:
-        in_channels (`int`): The number of channels in the input.
-        out_channels (`int`, *optional*, default to be `None`):
-            The number of output channels for the first conv2d layer. If None, same as `in_channels`.
-        dropout (`float`, *optional*, defaults to `0.0`): The dropout probability to use.
-        temb_channels (`int`, *optional*, default to `512`): the number of channels in timestep embedding.
-        groups (`int`, *optional*, default to `32`): The number of groups to use for the first normalization layer.
-        groups_out (`int`, *optional*, default to None):
-            The number of groups to use for the second normalization layer. if set to None, same as `groups`.
-        eps (`float`, *optional*, defaults to `1e-6`): The epsilon to use for the normalization.
-        non_linearity (`str`, *optional*, default to `"swish"`): the activation function to use.
-        time_embedding_norm (`str`, *optional*, default to `"default"` ): Time scale shift config.
-            By default, apply timestep embedding conditioning with a simple shift mechanism. Choose "scale_shift" for a
-            stronger conditioning with scale and shift.
-        kernel (`torch.Tensor`, optional, default to None): FIR filter, see
-            [`~models.resnet.FirUpsample2D`] and [`~models.resnet.FirDownsample2D`].
-        output_scale_factor (`float`, *optional*, default to be `1.0`): the scale factor to use for the output.
-        use_in_shortcut (`bool`, *optional*, default to `True`):
-            If `True`, add a 1x1 nn.conv2d layer for skip-connection.
-        up (`bool`, *optional*, default to `False`): If `True`, add an upsample layer.
-        down (`bool`, *optional*, default to `False`): If `True`, add a downsample layer.
-        conv_shortcut_bias (`bool`, *optional*, default to `True`):  If `True`, adds a learnable bias to the
-            `conv_shortcut` output.
-        conv_2d_out_channels (`int`, *optional*, default to `None`): the number of channels in the output.
-            If None, same as `out_channels`.
-    """
 
     def __init__(
         self,
@@ -290,20 +248,6 @@ class ResnetBlock2D(nn.Module):
 
 
 class Downsample2D(nn.Module):
-    """A 2D downsampling layer with an optional convolution.
-
-    Parameters:
-        channels (`int`):
-            number of channels in the inputs and outputs.
-        use_conv (`bool`, default `False`):
-            option to use a convolution.
-        out_channels (`int`, optional):
-            number of output channels. Defaults to `channels`.
-        padding (`int`, default `1`):
-            padding for the convolution.
-        name (`str`, default `conv`):
-            name of the downsampling 2D layer.
-    """
 
     def __init__(
         self,
@@ -383,35 +327,6 @@ class DownEncoderBlock2D(nn.Module):
 
 
 class UNetMidBlock2D(nn.Module):
-    """
-    A 2D UNet mid-block [`UNetMidBlock2D`] with multiple residual blocks and optional attention blocks.
-
-    Args:
-        in_channels (`int`): The number of input channels.
-        temb_channels (`int`): The number of temporal embedding channels.
-        dropout (`float`, *optional*, defaults to 0.0): The dropout rate.
-        num_layers (`int`, *optional*, defaults to 1): The number of residual blocks.
-        resnet_eps (`float`, *optional*, 1e-6 ): The epsilon value for the resnet blocks.
-        resnet_time_scale_shift (`str`, *optional*, defaults to `default`):
-            The type of normalization to apply to the time embeddings. This can help to improve the performance of the
-            model on tasks with long-range temporal dependencies.
-        resnet_act_fn (`str`, *optional*, defaults to `swish`): The activation function for the resnet blocks.
-        resnet_groups (`int`, *optional*, defaults to 32):
-            The number of groups to use in the group normalization layers of the resnet blocks.
-        attn_groups (`Optional[int]`, *optional*, defaults to None): The number of groups for the attention blocks.
-        resnet_pre_norm (`bool`, *optional*, defaults to `True`):
-            Whether to use pre-normalization for the resnet blocks.
-        add_attention (`bool`, *optional*, defaults to `True`): Whether to add attention blocks.
-        attention_head_dim (`int`, *optional*, defaults to 1):
-            Dimension of a single attention head. The number of attention heads is determined based on this value and
-            the number of input channels.
-        output_scale_factor (`float`, *optional*, defaults to 1.0): The output scale factor.
-
-    Returns:
-        `torch.Tensor`: The output of the last residual block, which is a tensor of shape `(batch_size, in_channels,
-        height, width)`.
-
-    """
 
     def __init__(
         self,
@@ -474,20 +389,6 @@ class UNetMidBlock2D(nn.Module):
 
 
 class Upsample2D(nn.Module):
-    """A 2D upsampling layer with an optional convolution.
-
-    Parameters:
-        channels (`int`):
-            number of channels in the inputs and outputs.
-        use_conv (`bool`, default `False`):
-            option to use a convolution.
-        use_conv_transpose (`bool`, default `False`):
-            option to use a convolution transpose.
-        out_channels (`int`, optional):
-            number of output channels. Defaults to `channels`.
-        name (`str`, default `conv`):
-            name of the upsampling 2D layer.
-    """
 
     def __init__(
         self,
@@ -562,28 +463,6 @@ class UpDecoderBlock2D(nn.Module):
 
 
 class Encoder(nn.Module):
-    r"""
-    The `Encoder` layer of a variational autoencoder that encodes its input into a latent representation.
-
-    Args:
-        in_channels (`int`, *optional*, defaults to 3):
-            The number of input channels.
-        out_channels (`int`, *optional*, defaults to 3):
-            The number of output channels.
-        down_block_types (`Tuple[str, ...]`, *optional*, defaults to `("DownEncoderBlock2D",)`):
-            The types of down blocks to use. See `~diffusers.models.unet_2d_blocks.get_down_block` for available
-            options.
-        block_out_channels (`Tuple[int, ...]`, *optional*, defaults to `(64,)`):
-            The number of output channels for each block.
-        layers_per_block (`int`, *optional*, defaults to 2):
-            The number of layers per block.
-        norm_num_groups (`int`, *optional*, defaults to 32):
-            The number of groups for normalization.
-        act_fn (`str`, *optional*, defaults to `"silu"`):
-            The activation function to use. See `~diffusers.models.activations.get_activation` for available options.
-        double_z (`bool`, *optional*, defaults to `True`):
-            Whether to double the number of output channels for the last block.
-    """
 
     def __init__(
         self,
@@ -645,8 +524,6 @@ class Encoder(nn.Module):
         self.gradient_checkpointing = False
 
     def forward(self, sample: torch.Tensor) -> torch.Tensor:
-        r"""The forward method of the `Encoder` class."""
-
         sample = self.conv_in(sample)
 
         for down_block in self.down_blocks:
@@ -663,27 +540,6 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    r"""
-    The `Decoder` layer of a variational autoencoder that decodes its latent representation into an output sample.
-
-    Args:
-        in_channels (`int`, *optional*, defaults to 3):
-            The number of input channels.
-        out_channels (`int`, *optional*, defaults to 3):
-            The number of output channels.
-        up_block_types (`Tuple[str, ...]`, *optional*, defaults to `("UpDecoderBlock2D",)`):
-            The types of up blocks to use. See `~diffusers.models.unet_2d_blocks.get_up_block` for available options.
-        block_out_channels (`Tuple[int, ...]`, *optional*, defaults to `(64,)`):
-            The number of output channels for each block.
-        layers_per_block (`int`, *optional*, defaults to 2):
-            The number of layers per block.
-        norm_num_groups (`int`, *optional*, defaults to 32):
-            The number of groups for normalization.
-        act_fn (`str`, *optional*, defaults to `"silu"`):
-            The activation function to use. See `~diffusers.models.activations.get_activation` for available options.
-        norm_type (`str`, *optional*, defaults to `"group"`):
-            The normalization type to use. Can be either `"group"` or `"spatial"`.
-    """
 
     def __init__(
         self,
@@ -749,8 +605,6 @@ class Decoder(nn.Module):
         self,
         sample: torch.Tensor,
     ) -> torch.Tensor:
-        r"""The forward method of the `Decoder` class."""
-
         sample = self.conv_in(sample)
 
         upscale_dtype = next(iter(self.up_blocks.parameters())).dtype
@@ -769,39 +623,6 @@ class Decoder(nn.Module):
 
 
 class AutoencoderKL(nn.Module):
-    r"""
-    A VAE model with KL loss for encoding images into latents and decoding latent representations into images.
-
-    This model inherits from [`ModelMixin`]. Check the superclass documentation for it's generic methods implemented
-    for all models (such as downloading or saving).
-
-    Parameters:
-        in_channels (int, *optional*, defaults to 3): Number of channels in the input image.
-        out_channels (int,  *optional*, defaults to 3): Number of channels in the output.
-        down_block_types (`Tuple[str]`, *optional*, defaults to `("DownEncoderBlock2D",)`):
-            Tuple of downsample block types.
-        up_block_types (`Tuple[str]`, *optional*, defaults to `("UpDecoderBlock2D",)`):
-            Tuple of upsample block types.
-        block_out_channels (`Tuple[int]`, *optional*, defaults to `(64,)`):
-            Tuple of block output channels.
-        act_fn (`str`, *optional*, defaults to `"silu"`): The activation function to use.
-        latent_channels (`int`, *optional*, defaults to 4): Number of channels in the latent space.
-        sample_size (`int`, *optional*, defaults to `32`): Sample input size.
-        scaling_factor (`float`, *optional*, defaults to 0.18215):
-            The component-wise standard deviation of the trained latent space computed using the first batch of the
-            training set. This is used to scale the latent space to have unit variance when training the diffusion
-            model. The latents are scaled with the formula `z = z * scaling_factor` before being passed to the
-            diffusion model. When decoding, the latents are scaled back to the original scale with the formula: `z = 1
-            / scaling_factor * z`. For more details, refer to sections 4.3.2 and D.1 of the [High-Resolution Image
-            Synthesis with Latent Diffusion Models](https://huggingface.co/papers/2112.10752) paper.
-        force_upcast (`bool`, *optional*, default to `True`):
-            If enabled it will force the VAE to run in float32 for high image resolution pipelines, such as SD-XL. VAE
-            can be fine-tuned / trained to a lower range without losing too much precision in which case `force_upcast`
-            can be set to `False` - see: https://huggingface.co/madebyollin/sdxl-vae-fp16-fix
-        mid_block_add_attention (`bool`, *optional*, default to `True`):
-            If enabled, the mid_block of the Encoder and Decoder will have attention blocks. If set to false, the
-            mid_block will only have resnet blocks
-    """
 
     _supports_gradient_checkpointing = True
     _no_split_modules = ["BasicTransformerBlock", "ResnetBlock2D"]
@@ -856,7 +677,6 @@ class AutoencoderKL(nn.Module):
         sample_posterior: bool = False,
         generator: Optional[torch.Generator] = None,
     ) -> torch.Tensor:
-        r"""Forward pass returning decoded pixels."""
         x = sample
         moments = self.encode(x)
         posterior = DiagonalGaussianDistribution(moments)
