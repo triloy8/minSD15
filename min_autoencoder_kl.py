@@ -85,35 +85,6 @@ def randn_tensor(
     return latents
 
 
-class RMSNorm(nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6, elementwise_affine: bool = True):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim)) if elementwise_affine else None
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        var = x.pow(2).mean(dim=-1, keepdim=True)
-        x = x * torch.rsqrt(var + self.eps)
-        if self.weight is not None:
-            x = x * self.weight
-        return x
-
-
-class SpatialNorm(nn.Module):
-    def __init__(self, num_channels: int, temb_channels: int, eps: float = 1e-6):
-        super().__init__()
-        self.norm = nn.GroupNorm(num_groups=32, num_channels=num_channels, eps=eps, affine=False)
-        self.conv = nn.Conv2d(temb_channels, 2 * num_channels, kernel_size=1)
-
-    def forward(self, hidden_states: torch.Tensor, temb: torch.Tensor) -> torch.Tensor:
-        if temb.ndim == 2:
-            temb = temb[:, :, None, None]
-        scale_shift = self.conv(temb)
-        scale, shift = scale_shift.chunk(2, dim=1)
-        hidden_states = self.norm(hidden_states)
-        return hidden_states * (1 + scale) + shift
-
-
 class Attention(nn.Module):
     def __init__(
         self,
@@ -123,24 +94,13 @@ class Attention(nn.Module):
         rescale_output_factor: float = 1.0,
         eps: float = 1e-6,
         norm_num_groups: Optional[int] = None,
-        spatial_norm_dim: Optional[int] = None,
-        residual_connection: bool = True,
         bias: bool = True,
-        upcast_softmax: bool = False,
         _from_deprecated_attn_block: bool = False,
     ):
         super().__init__()
         norm_num_groups = norm_num_groups or 32
         self.rescale_output_factor = rescale_output_factor
-        self.residual_connection = residual_connection
-        self.upcast_softmax = upcast_softmax
-
-        if spatial_norm_dim is not None:
-            self.group_norm = None
-            self.spatial_norm = SpatialNorm(channels, spatial_norm_dim, eps=eps)
-        else:
-            self.group_norm = nn.GroupNorm(num_groups=norm_num_groups, num_channels=channels, eps=eps, affine=True)
-            self.spatial_norm = None
+        self.group_norm = nn.GroupNorm(num_groups=norm_num_groups, num_channels=channels, eps=eps, affine=True)
 
         inner_dim = heads * dim_head
         self.heads = heads
@@ -153,10 +113,7 @@ class Attention(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, temb: Optional[torch.Tensor] = None) -> torch.Tensor:
         residual = hidden_states
-        if self.spatial_norm is not None:
-            hidden_states = self.spatial_norm(hidden_states, temb)
-        else:
-            hidden_states = self.group_norm(hidden_states)
+        hidden_states = self.group_norm(hidden_states)
 
         b, c, h, w = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(b, h * w, c)
@@ -170,11 +127,7 @@ class Attention(nn.Module):
         v = v.view(b, h * w, self.heads, self.dim_head).transpose(1, 2)
 
         attn_scores = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-        if self.upcast_softmax:
-            attn_scores = attn_scores.float()
-        attn_probs = attn_scores.softmax(dim=-1)
-        if self.upcast_softmax:
-            attn_probs = attn_probs.to(q.dtype)
+        attn_probs = attn_scores.float().softmax(dim=-1).to(q.dtype)
 
         hidden_states = torch.matmul(attn_probs, v)
         hidden_states = hidden_states.transpose(1, 2).reshape(b, h * w, self.heads * self.dim_head)
@@ -182,8 +135,7 @@ class Attention(nn.Module):
         hidden_states = self.to_out[1](hidden_states)
         hidden_states = hidden_states.reshape(b, h, w, c).permute(0, 3, 1, 2)
 
-        if self.residual_connection:
-            hidden_states = (hidden_states + residual) / self.rescale_output_factor
+        hidden_states = (hidden_states + residual) / self.rescale_output_factor
 
         return hidden_states
 
@@ -279,7 +231,7 @@ class ResnetBlock2D(nn.Module):
         self,
         *,
         in_channels: int,
-        out_channels: Optional[int] = None,
+        out_channels: int,
         conv_shortcut: bool = False,
         dropout: float = 0.0,
         temb_channels: int = 512,
@@ -292,49 +244,22 @@ class ResnetBlock2D(nn.Module):
         time_embedding_norm: str = "default",  # default, scale_shift,
         kernel: Optional[torch.Tensor] = None,
         output_scale_factor: float = 1.0,
-        use_in_shortcut: Optional[bool] = None,
         up: bool = False,
         down: bool = False,
         conv_shortcut_bias: bool = True,
         conv_2d_out_channels: Optional[int] = None,
     ):
         super().__init__()
-        if time_embedding_norm == "ada_group":
-            raise ValueError(
-                "This class cannot be used with `time_embedding_norm==ada_group`, please use `ResnetBlockCondNorm2D` instead",
-            )
-        if time_embedding_norm == "spatial":
-            raise ValueError(
-                "This class cannot be used with `time_embedding_norm==spatial`, please use `ResnetBlockCondNorm2D` instead",
-            )
-
         self.pre_norm = True
         self.in_channels = in_channels
-        out_channels = in_channels if out_channels is None else out_channels
         self.out_channels = out_channels
         self.use_conv_shortcut = conv_shortcut
-        self.up = up
-        self.down = down
         self.output_scale_factor = output_scale_factor
-        self.time_embedding_norm = time_embedding_norm
-        self.skip_time_act = skip_time_act
-
-        if groups_out is None:
-            groups_out = groups
+        groups_out = groups
 
         self.norm1 = torch.nn.GroupNorm(num_groups=groups, num_channels=in_channels, eps=eps, affine=True)
 
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
-
-        if temb_channels is not None:
-            if self.time_embedding_norm == "default":
-                self.time_emb_proj = nn.Linear(temb_channels, out_channels)
-            elif self.time_embedding_norm == "scale_shift":
-                self.time_emb_proj = nn.Linear(temb_channels, 2 * out_channels)
-            else:
-                raise ValueError(f"unknown time_embedding_norm : {self.time_embedding_norm} ")
-        else:
-            self.time_emb_proj = None
 
         self.norm2 = torch.nn.GroupNorm(num_groups=groups_out, num_channels=out_channels, eps=eps, affine=True)
 
@@ -344,25 +269,7 @@ class ResnetBlock2D(nn.Module):
 
         self.nonlinearity = nn.SiLU()
 
-        self.upsample = self.downsample = None
-        if self.up:
-            if kernel == "fir":
-                fir_kernel = (1, 3, 3, 1)
-                self.upsample = lambda x: upsample_2d(x, kernel=fir_kernel)
-            elif kernel == "sde_vp":
-                self.upsample = partial(F.interpolate, scale_factor=2.0, mode="nearest")
-            else:
-                self.upsample = Upsample2D(in_channels, use_conv=False)
-        elif self.down:
-            if kernel == "fir":
-                fir_kernel = (1, 3, 3, 1)
-                self.downsample = lambda x: downsample_2d(x, kernel=fir_kernel)
-            elif kernel == "sde_vp":
-                self.downsample = partial(F.avg_pool2d, kernel_size=2, stride=2)
-            else:
-                self.downsample = Downsample2D(in_channels, use_conv=False, padding=1, name="op")
-
-        self.use_in_shortcut = self.in_channels != conv_2d_out_channels if use_in_shortcut is None else use_in_shortcut
+        self.use_in_shortcut = self.in_channels != conv_2d_out_channels
 
         self.conv_shortcut = None
         if self.use_in_shortcut:
@@ -381,38 +288,9 @@ class ResnetBlock2D(nn.Module):
         hidden_states = self.norm1(hidden_states)
         hidden_states = self.nonlinearity(hidden_states)
 
-        if self.upsample is not None:
-            # upsample_nearest_nhwc fails with large batch sizes. see https://github.com/huggingface/diffusers/issues/984
-            if hidden_states.shape[0] >= 64:
-                input_tensor = input_tensor.contiguous()
-                hidden_states = hidden_states.contiguous()
-            input_tensor = self.upsample(input_tensor)
-            hidden_states = self.upsample(hidden_states)
-        elif self.downsample is not None:
-            input_tensor = self.downsample(input_tensor)
-            hidden_states = self.downsample(hidden_states)
-
         hidden_states = self.conv1(hidden_states)
 
-        if self.time_emb_proj is not None:
-            if not self.skip_time_act:
-                temb = self.nonlinearity(temb)
-            temb = self.time_emb_proj(temb)[:, :, None, None]
-
-        if self.time_embedding_norm == "default":
-            if temb is not None:
-                hidden_states = hidden_states + temb
-            hidden_states = self.norm2(hidden_states)
-        elif self.time_embedding_norm == "scale_shift":
-            if temb is None:
-                raise ValueError(
-                    f" `temb` should not be None when `time_embedding_norm` is {self.time_embedding_norm}"
-                )
-            time_scale, time_shift = torch.chunk(temb, 2, dim=1)
-            hidden_states = self.norm2(hidden_states)
-            hidden_states = hidden_states * (1 + time_scale) + time_shift
-        else:
-            hidden_states = self.norm2(hidden_states)
+        hidden_states = self.norm2(hidden_states)
 
         hidden_states = self.nonlinearity(hidden_states)
 
@@ -446,59 +324,22 @@ class Downsample2D(nn.Module):
     def __init__(
         self,
         channels: int,
-        use_conv: bool = False,
         out_channels: Optional[int] = None,
-        padding: int = 1,
-        name: str = "conv",
         kernel_size=3,
-        norm_type=None,
-        eps=None,
-        elementwise_affine=None,
         bias=True,
     ):
         super().__init__()
         self.channels = channels
         self.out_channels = out_channels or channels
-        self.use_conv = use_conv
-        self.padding = padding
         stride = 2
-        self.name = name
-
-        if norm_type == "ln_norm":
-            self.norm = nn.LayerNorm(channels, eps, elementwise_affine)
-        elif norm_type == "rms_norm":
-            self.norm = RMSNorm(channels, eps, elementwise_affine)
-        elif norm_type is None:
-            self.norm = None
-        else:
-            raise ValueError(f"unknown norm_type: {norm_type}")
-
-        if use_conv:
-            conv = nn.Conv2d(
-                self.channels, self.out_channels, kernel_size=kernel_size, stride=stride, padding=padding, bias=bias
-            )
-        else:
-            assert self.channels == self.out_channels
-            conv = nn.AvgPool2d(kernel_size=stride, stride=stride)
-
-        # TODO(Suraj, Patrick) - clean up after weight dicts are correctly renamed
-        if name == "conv":
-            self.Conv2d_0 = conv
-            self.conv = conv
-        elif name == "Conv2d_0":
-            self.conv = conv
-        else:
-            self.conv = conv
+        self.conv = nn.Conv2d(
+            self.channels, self.out_channels, kernel_size=kernel_size, stride=stride, padding=0, bias=bias
+        )
 
     def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         assert hidden_states.shape[1] == self.channels
 
-        if self.norm is not None:
-            hidden_states = self.norm(hidden_states.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
-
-        if self.use_conv and self.padding == 0:
-            pad = (0, 1, 0, 1)
-            hidden_states = F.pad(hidden_states, pad, mode="constant", value=0)
+        hidden_states = F.pad(hidden_states, (0, 1, 0, 1), mode="constant", value=0)
 
         assert hidden_states.shape[1] == self.channels
 
@@ -548,9 +389,7 @@ class DownEncoderBlock2D(nn.Module):
         if add_downsample:
             self.downsamplers = nn.ModuleList(
                 [
-                    Downsample2D(
-                        out_channels, use_conv=True, out_channels=out_channels, padding=downsample_padding, name="op"
-                    )
+                    Downsample2D(out_channels, out_channels=out_channels)
                 ]
             )
         else:
@@ -615,11 +454,7 @@ class UNetMidBlock2D(nn.Module):
         output_scale_factor: float = 1.0,
     ):
         super().__init__()
-        resnet_groups = resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
-        self.add_attention = add_attention
-
-        if attn_groups is None:
-            attn_groups = resnet_groups if resnet_time_scale_shift == "default" else None
+        attn_groups = resnet_groups
 
         resnets = [
             ResnetBlock2D(
@@ -637,31 +472,19 @@ class UNetMidBlock2D(nn.Module):
         ]
         attentions = []
 
-        if attention_head_dim is None:
-            logger.warning(
-                f"It is not recommend to pass `attention_head_dim=None`. Defaulting `attention_head_dim` to `in_channels`: {in_channels}."
-            )
-            attention_head_dim = in_channels
-
         for _ in range(num_layers):
-            if self.add_attention:
-                attentions.append(
-                    Attention(
-                        in_channels,
-                        heads=in_channels // attention_head_dim,
-                        dim_head=attention_head_dim,
-                        rescale_output_factor=output_scale_factor,
-                        eps=resnet_eps,
-                        norm_num_groups=attn_groups,
-                        spatial_norm_dim=temb_channels if resnet_time_scale_shift == "spatial" else None,
-                        residual_connection=True,
-                        bias=True,
-                        upcast_softmax=True,
-                        _from_deprecated_attn_block=True,
-                    )
+            attentions.append(
+                Attention(
+                    in_channels,
+                    heads=in_channels // attention_head_dim,
+                    dim_head=attention_head_dim,
+                    rescale_output_factor=output_scale_factor,
+                    eps=resnet_eps,
+                    norm_num_groups=attn_groups,
+                    bias=True,
+                    _from_deprecated_attn_block=True,
                 )
-            else:
-                attentions.append(None)
+            )
 
             resnets.append(
                 ResnetBlock2D(
@@ -681,19 +504,11 @@ class UNetMidBlock2D(nn.Module):
         self.attentions = nn.ModuleList(attentions)
         self.resnets = nn.ModuleList(resnets)
 
-        self.gradient_checkpointing = False
-
     def forward(self, hidden_states: torch.Tensor, temb: Optional[torch.Tensor] = None) -> torch.Tensor:
         hidden_states = self.resnets[0](hidden_states, temb)
         for attn, resnet in zip(self.attentions, self.resnets[1:]):
-            if torch.is_grad_enabled() and self.gradient_checkpointing:
-                if attn is not None:
-                    hidden_states = attn(hidden_states, temb=temb)
-                hidden_states = self._gradient_checkpointing_func(resnet, hidden_states, temb)
-            else:
-                if attn is not None:
-                    hidden_states = attn(hidden_states, temb=temb)
-                hidden_states = resnet(hidden_states, temb)
+            hidden_states = attn(hidden_states, temb=temb)
+            hidden_states = resnet(hidden_states, temb)
 
         return hidden_states
 
@@ -717,88 +532,25 @@ class Upsample2D(nn.Module):
     def __init__(
         self,
         channels: int,
-        use_conv: bool = False,
-        use_conv_transpose: bool = False,
         out_channels: Optional[int] = None,
-        name: str = "conv",
-        kernel_size: Optional[int] = None,
+        kernel_size: int = 3,
         padding=1,
-        norm_type=None,
-        eps=None,
-        elementwise_affine=None,
         bias=True,
-        interpolate=True,
     ):
         super().__init__()
         self.channels = channels
         self.out_channels = out_channels or channels
-        self.use_conv = use_conv
-        self.use_conv_transpose = use_conv_transpose
-        self.name = name
-        self.interpolate = interpolate
+        self.conv = nn.Conv2d(self.channels, self.out_channels, kernel_size=kernel_size, padding=padding, bias=bias)
 
-        if norm_type == "ln_norm":
-            self.norm = nn.LayerNorm(channels, eps, elementwise_affine)
-        elif norm_type == "rms_norm":
-            self.norm = RMSNorm(channels, eps, elementwise_affine)
-        elif norm_type is None:
-            self.norm = None
-        else:
-            raise ValueError(f"unknown norm_type: {norm_type}")
-
-        conv = None
-        if use_conv_transpose:
-            if kernel_size is None:
-                kernel_size = 4
-            conv = nn.ConvTranspose2d(
-                channels, self.out_channels, kernel_size=kernel_size, stride=2, padding=padding, bias=bias
-            )
-        elif use_conv:
-            if kernel_size is None:
-                kernel_size = 3
-            conv = nn.Conv2d(self.channels, self.out_channels, kernel_size=kernel_size, padding=padding, bias=bias)
-
-        # TODO(Suraj, Patrick) - clean up after weight dicts are correctly renamed
-        if name == "conv":
-            self.conv = conv
-        else:
-            self.Conv2d_0 = conv
-
-    def forward(self, hidden_states: torch.Tensor, output_size: Optional[int] = None, *args, **kwargs) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         assert hidden_states.shape[1] == self.channels
-
-        if self.norm is not None:
-            hidden_states = self.norm(hidden_states.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
-
-        if self.use_conv_transpose:
-            return self.conv(hidden_states)
 
         # upsample_nearest_nhwc fails with large batch sizes. see https://github.com/huggingface/diffusers/issues/984
         if hidden_states.shape[0] >= 64:
             hidden_states = hidden_states.contiguous()
 
-        # if `output_size` is passed we force the interpolation output
-        # size and do not make use of `scale_factor=2`
-        if self.interpolate:
-            # upsample_nearest_nhwc also fails when the number of output elements is large
-            # https://github.com/pytorch/pytorch/issues/141831
-            scale_factor = (
-                2 if output_size is None else max([f / s for f, s in zip(output_size, hidden_states.shape[-2:])])
-            )
-            if hidden_states.numel() * scale_factor > pow(2, 31):
-                hidden_states = hidden_states.contiguous()
-
-            if output_size is None:
-                hidden_states = F.interpolate(hidden_states, scale_factor=2.0, mode="nearest")
-            else:
-                hidden_states = F.interpolate(hidden_states, size=output_size, mode="nearest")
-
-        # TODO(Suraj, Patrick) - clean up after weight dicts are correctly renamed
-        if self.use_conv:
-            if self.name == "conv":
-                hidden_states = self.conv(hidden_states)
-            else:
-                hidden_states = self.Conv2d_0(hidden_states)
+        hidden_states = F.interpolate(hidden_states, scale_factor=2.0, mode="nearest")
+        hidden_states = self.conv(hidden_states)
 
         return hidden_states
 
@@ -844,7 +596,7 @@ class UpDecoderBlock2D(nn.Module):
         self.resnets = nn.ModuleList(resnets)
 
         if add_upsample:
-            self.upsamplers = nn.ModuleList([Upsample2D(out_channels, use_conv=True, out_channels=out_channels)])
+            self.upsamplers = nn.ModuleList([Upsample2D(out_channels, out_channels=out_channels)])
         else:
             self.upsamplers = None
 
@@ -949,7 +701,7 @@ class Encoder(nn.Module):
         self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[-1], num_groups=norm_num_groups, eps=1e-6)
         self.conv_act = nn.SiLU()
 
-        conv_out_channels = 2 * out_channels if double_z else out_channels
+        conv_out_channels = 2 * out_channels
         self.conv_out = nn.Conv2d(block_out_channels[-1], conv_out_channels, 3, padding=1)
 
         self.gradient_checkpointing = False
@@ -959,20 +711,10 @@ class Encoder(nn.Module):
 
         sample = self.conv_in(sample)
 
-        if torch.is_grad_enabled() and self.gradient_checkpointing:
-            # down
-            for down_block in self.down_blocks:
-                sample = self._gradient_checkpointing_func(down_block, sample)
-            # middle
-            sample = self._gradient_checkpointing_func(self.mid_block, sample)
+        for down_block in self.down_blocks:
+            sample = down_block(sample)
 
-        else:
-            # down
-            for down_block in self.down_blocks:
-                sample = down_block(sample)
-
-            # middle
-            sample = self.mid_block(sample)
+        sample = self.mid_block(sample)
 
         # post-process
         sample = self.conv_norm_out(sample)
@@ -1030,7 +772,7 @@ class Decoder(nn.Module):
 
         self.up_blocks = nn.ModuleList([])
 
-        temb_channels = in_channels if norm_type == "spatial" else None
+        temb_channels = None
 
         # mid
         self.mid_block = UNetMidBlock2D(
@@ -1038,7 +780,7 @@ class Decoder(nn.Module):
             resnet_eps=1e-6,
             resnet_act_fn=act_fn,
             output_scale_factor=1,
-            resnet_time_scale_shift="default" if norm_type == "group" else norm_type,
+            resnet_time_scale_shift="default",
             attention_head_dim=block_out_channels[-1],
             resnet_groups=norm_num_groups,
             temb_channels=temb_channels,
@@ -1072,10 +814,7 @@ class Decoder(nn.Module):
             prev_output_channel = output_channel
 
         # out
-        if norm_type == "spatial":
-            self.conv_norm_out = SpatialNorm(block_out_channels[0], temb_channels)
-        else:
-            self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=norm_num_groups, eps=1e-6)
+        self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=norm_num_groups, eps=1e-6)
         self.conv_act = nn.SiLU()
         self.conv_out = nn.Conv2d(block_out_channels[0], out_channels, 3, padding=1)
 
@@ -1084,35 +823,20 @@ class Decoder(nn.Module):
     def forward(
         self,
         sample: torch.Tensor,
-        latent_embeds: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         r"""The forward method of the `Decoder` class."""
 
         sample = self.conv_in(sample)
 
         upscale_dtype = next(iter(self.up_blocks.parameters())).dtype
-        if torch.is_grad_enabled() and self.gradient_checkpointing:
-            # middle
-            sample = self._gradient_checkpointing_func(self.mid_block, sample, latent_embeds)
-            sample = sample.to(upscale_dtype)
+        sample = self.mid_block(sample)
+        sample = sample.to(upscale_dtype)
 
-            # up
-            for up_block in self.up_blocks:
-                sample = self._gradient_checkpointing_func(up_block, sample, latent_embeds)
-        else:
-            # middle
-            sample = self.mid_block(sample, latent_embeds)
-            sample = sample.to(upscale_dtype)
-
-            # up
-            for up_block in self.up_blocks:
-                sample = up_block(sample, latent_embeds)
+        for up_block in self.up_blocks:
+            sample = up_block(sample)
 
         # post-process
-        if latent_embeds is None:
-            sample = self.conv_norm_out(sample)
-        else:
-            sample = self.conv_norm_out(sample, latent_embeds)
+        sample = self.conv_norm_out(sample)
         sample = self.conv_act(sample)
         sample = self.conv_out(sample)
 
@@ -1188,41 +912,23 @@ class AutoencoderKL(nn.Module):
         self.quant_conv = nn.Conv2d(2 * VAE_LATENT_CHANNELS, 2 * VAE_LATENT_CHANNELS, 1)
         self.post_quant_conv = nn.Conv2d(VAE_LATENT_CHANNELS, VAE_LATENT_CHANNELS, 1)
 
-        self.use_slicing = False
         self.scaling_factor = 0.18215
 
     def _encode(self, x: torch.Tensor) -> torch.Tensor:
         enc = self.encoder(x)
-        if self.quant_conv is not None:
-            enc = self.quant_conv(enc)
+        enc = self.quant_conv(enc)
 
         return enc
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
-        if self.use_slicing and x.shape[0] > 1:
-            encoded_slices = [self._encode(x_slice) for x_slice in x.split(1)]
-            h = torch.cat(encoded_slices)
-        else:
-            h = self._encode(x)
-
-        return h
+        return self._encode(x)
 
     def _decode(self, z: torch.Tensor) -> torch.Tensor:
-        if self.post_quant_conv is not None:
-            z = self.post_quant_conv(z)
-
-        dec = self.decoder(z)
-
-        return dec
+        z = self.post_quant_conv(z)
+        return self.decoder(z)
 
     def decode(self, z: torch.FloatTensor, generator=None) -> torch.FloatTensor:
-        if self.use_slicing and z.shape[0] > 1:
-            decoded_slices = [self._decode(z_slice) for z_slice in z.split(1)]
-            decoded = torch.cat(decoded_slices)
-        else:
-            decoded = self._decode(z)
-
-        return decoded
+        return self._decode(z)
 
     def forward(
         self,
