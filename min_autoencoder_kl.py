@@ -1,3 +1,15 @@
+# Copyright 2026 HuggingFace Inc.
+# Further Modifications Copyright 2026 triloy8
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Provenance:
+#   • Original file:
+#       https://github.com/huggingface/diffusers
+#
+# Changes by triloy8:
+#   • Left only AutoencoderKL w/ SD1.5 config
+
 from typing import Optional, Tuple, Union, List
 import torch
 import torch.nn as nn

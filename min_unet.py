@@ -1,6 +1,6 @@
-# Copyright 2025 HuggingFace Inc.
-# Modifications Copyright 2025 Simo Ryu
-# Further Modifications Copyright 2025 triloy8
+# Copyright 2026 HuggingFace Inc.
+# Modifications Copyright 2026 Simo Ryu
+# Further Modifications Copyright 2026 triloy8
 #
 # SPDX-License-Identifier: Apache-2.0
 #

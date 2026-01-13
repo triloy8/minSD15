@@ -1,4 +1,4 @@
-# Copyright 2025 triloy8
+# Copyright 2026 triloy8
 #
 # SPDX-License-Identifier: Apache-2.0
 
