@@ -1,12 +1,9 @@
 from typing import Optional, Tuple, Union, List
-import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 import numpy as np
-
-logger = logging.getLogger(__name__)
 
 VAE_IN_CHANNELS = 3
 VAE_OUT_CHANNELS = 3
@@ -14,8 +11,6 @@ VAE_LATENT_CHANNELS = 4
 VAE_BLOCK_OUT_CHANNELS = (128, 256, 512, 512)
 VAE_LAYERS_PER_BLOCK = 2
 VAE_NORM_NUM_GROUPS = 32
-VAE_ACT_FN = "silu"
-VAE_SAMPLE_SIZE = 512
 VAE_DOWN_BLOCK_TYPES = ("DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D")
 VAE_UP_BLOCK_TYPES = ("UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D")
 
