@@ -35,8 +35,8 @@ Dog paintings generated with the min pipeline (resized previews):
 - **UNet (SD 1.5)** — done (adapted from minSDXL)
 - **CLIP text encoder** — done (adapted from Transformers)
 - **Scheduler (Euler)** — done (adapted from Diffusers)
-- **VAE decoder** — not done (next on the list)
-- **CLIP tokenizer** — not done
+- **VAE (AutoencoderKL)** — done (adapted from Diffusers)
+- **CLIP tokenizer** — not done (yet)
 
 # Diffusion theory
 
