@@ -12,7 +12,7 @@ Make sure to have [`uv`](https://github.com/astral-sh/uv) installed and just use
 
 # Gallery
 
-Dog paintings generated with this repo (resized previews):
+Dog paintings generated with the min pipeline (resized previews):
 
 <table>
   <tr>

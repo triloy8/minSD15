@@ -10,7 +10,7 @@
 # Changes by triloy8:
 #   • Deconstructed pipeline
 
-from diffusers import AutoencoderKL
+from autoencoder_kl import AutoencoderKL
 from huggingface_hub import snapshot_download
 from min_eulerd import EulerDiscreteScheduler
 from min_unet import UNet2DConditionModel
@@ -52,7 +52,6 @@ if not all(path.exists() for path in expected_artifacts):
 #####################################################################
 
 clip_tokenizer_config = json.load(open(str("./config/tokenizer/tokenizer_config.json")))
-vae_config = json.load(open("./config/vae_config.json"))
 
 scheduler = EulerDiscreteScheduler()
 
@@ -73,7 +72,7 @@ unet.load_state_dict(unet_state_dict)
 
 vae_model_path = "./weights/vae.fp16.safetensors"
 vae_state_dict = load_file(vae_model_path)
-vae = AutoencoderKL(**vae_config)
+vae = AutoencoderKL()
 vae.load_state_dict(vae_state_dict)
 
 #####################################################################
@@ -152,7 +151,7 @@ for t in tqdm(scheduler.timesteps):
 
 latents = 1 / 0.18215 * latents
 with torch.no_grad():
-    image = vae.decode(latents).sample
+    image = vae.decode(latents)
 
 image = (image / 2 + 0.5).clamp(0, 1).squeeze()
 image = (image.permute(1, 2, 0) * 255).to(torch.uint8).cpu().numpy()

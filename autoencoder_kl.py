@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from typing import Optional, Tuple, Union, List
+import logging
+from functools import partial
 
 import torch
 import torch.nn as nn
@@ -19,35 +21,18 @@ import torch.nn.functional as F
 
 import numpy as np
 
+logger = logging.getLogger(__name__)
 
-# @dataclass
-# will be removed in favor of none dataclass outputs
-class AutoencoderKLOutput(object):
-    """
-    Output of AutoencoderKL encoding method.
-
-    Args:
-        latent_dist (`DiagonalGaussianDistribution`):
-            Encoded outputs of `Encoder` represented as the mean and logvar of `DiagonalGaussianDistribution`.
-            `DiagonalGaussianDistribution` allows for sampling latents from the distribution.
-    """
-
-    latent_dist: "DiagonalGaussianDistribution"  # noqa: F821
-
-
-# @dataclass
-# will be removed in favor of none dataclass outputs
-class DecoderOutput(object):
-    r"""
-    Output of decoding method.
-
-    Args:
-        sample (`torch.Tensor` of shape `(batch_size, num_channels, height, width)`):
-            The decoded output sample from the last layer of the model.
-    """
-
-    sample: torch.Tensor
-    commit_loss: Optional[torch.FloatTensor] = None
+VAE_IN_CHANNELS = 3
+VAE_OUT_CHANNELS = 3
+VAE_LATENT_CHANNELS = 4
+VAE_BLOCK_OUT_CHANNELS = (128, 256, 512, 512)
+VAE_LAYERS_PER_BLOCK = 2
+VAE_NORM_NUM_GROUPS = 32
+VAE_ACT_FN = "silu"
+VAE_SAMPLE_SIZE = 512
+VAE_DOWN_BLOCK_TYPES = ("DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D", "DownEncoderBlock2D")
+VAE_UP_BLOCK_TYPES = ("UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D", "UpDecoderBlock2D")
 
 
 def randn_tensor(
@@ -98,6 +83,109 @@ def randn_tensor(
         latents = torch.randn(shape, generator=generator, device=rand_device, dtype=dtype, layout=layout).to(device)
 
     return latents
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6, elementwise_affine: bool = True):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim)) if elementwise_affine else None
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        var = x.pow(2).mean(dim=-1, keepdim=True)
+        x = x * torch.rsqrt(var + self.eps)
+        if self.weight is not None:
+            x = x * self.weight
+        return x
+
+
+class SpatialNorm(nn.Module):
+    def __init__(self, num_channels: int, temb_channels: int, eps: float = 1e-6):
+        super().__init__()
+        self.norm = nn.GroupNorm(num_groups=32, num_channels=num_channels, eps=eps, affine=False)
+        self.conv = nn.Conv2d(temb_channels, 2 * num_channels, kernel_size=1)
+
+    def forward(self, hidden_states: torch.Tensor, temb: torch.Tensor) -> torch.Tensor:
+        if temb.ndim == 2:
+            temb = temb[:, :, None, None]
+        scale_shift = self.conv(temb)
+        scale, shift = scale_shift.chunk(2, dim=1)
+        hidden_states = self.norm(hidden_states)
+        return hidden_states * (1 + scale) + shift
+
+
+class Attention(nn.Module):
+    def __init__(
+        self,
+        channels: int,
+        heads: int,
+        dim_head: int,
+        rescale_output_factor: float = 1.0,
+        eps: float = 1e-6,
+        norm_num_groups: Optional[int] = None,
+        spatial_norm_dim: Optional[int] = None,
+        residual_connection: bool = True,
+        bias: bool = True,
+        upcast_softmax: bool = False,
+        _from_deprecated_attn_block: bool = False,
+    ):
+        super().__init__()
+        norm_num_groups = norm_num_groups or 32
+        self.rescale_output_factor = rescale_output_factor
+        self.residual_connection = residual_connection
+        self.upcast_softmax = upcast_softmax
+
+        if spatial_norm_dim is not None:
+            self.group_norm = None
+            self.spatial_norm = SpatialNorm(channels, spatial_norm_dim, eps=eps)
+        else:
+            self.group_norm = nn.GroupNorm(num_groups=norm_num_groups, num_channels=channels, eps=eps, affine=True)
+            self.spatial_norm = None
+
+        inner_dim = heads * dim_head
+        self.heads = heads
+        self.dim_head = dim_head
+        self.scale = dim_head**-0.5
+        self.to_q = nn.Linear(channels, inner_dim, bias=bias)
+        self.to_k = nn.Linear(channels, inner_dim, bias=bias)
+        self.to_v = nn.Linear(channels, inner_dim, bias=bias)
+        self.to_out = nn.ModuleList([nn.Linear(inner_dim, channels, bias=bias), nn.Dropout(0.0)])
+
+    def forward(self, hidden_states: torch.Tensor, temb: Optional[torch.Tensor] = None) -> torch.Tensor:
+        residual = hidden_states
+        if self.spatial_norm is not None:
+            hidden_states = self.spatial_norm(hidden_states, temb)
+        else:
+            hidden_states = self.group_norm(hidden_states)
+
+        b, c, h, w = hidden_states.shape
+        hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(b, h * w, c)
+
+        q = self.to_q(hidden_states)
+        k = self.to_k(hidden_states)
+        v = self.to_v(hidden_states)
+
+        q = q.view(b, h * w, self.heads, self.dim_head).transpose(1, 2)
+        k = k.view(b, h * w, self.heads, self.dim_head).transpose(1, 2)
+        v = v.view(b, h * w, self.heads, self.dim_head).transpose(1, 2)
+
+        attn_scores = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        if self.upcast_softmax:
+            attn_scores = attn_scores.float()
+        attn_probs = attn_scores.softmax(dim=-1)
+        if self.upcast_softmax:
+            attn_probs = attn_probs.to(q.dtype)
+
+        hidden_states = torch.matmul(attn_probs, v)
+        hidden_states = hidden_states.transpose(1, 2).reshape(b, h * w, self.heads * self.dim_head)
+        hidden_states = self.to_out[0](hidden_states)
+        hidden_states = self.to_out[1](hidden_states)
+        hidden_states = hidden_states.reshape(b, h, w, c).permute(0, 3, 1, 2)
+
+        if self.residual_connection:
+            hidden_states = (hidden_states + residual) / self.rescale_output_factor
+
+        return hidden_states
 
 
 class DiagonalGaussianDistribution(object):
@@ -254,7 +342,7 @@ class ResnetBlock2D(nn.Module):
         conv_2d_out_channels = conv_2d_out_channels or out_channels
         self.conv2 = nn.Conv2d(out_channels, conv_2d_out_channels, kernel_size=3, stride=1, padding=1)
 
-        self.nonlinearity = get_activation(non_linearity)
+        self.nonlinearity = nn.SiLU()
 
         self.upsample = self.downsample = None
         if self.up:
@@ -288,10 +376,6 @@ class ResnetBlock2D(nn.Module):
             )
 
     def forward(self, input_tensor: torch.Tensor, temb: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-        if len(args) > 0 or kwargs.get("scale", None) is not None:
-            deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
-            deprecate("scale", "1.0.0", deprecation_message)
-
         hidden_states = input_tensor
 
         hidden_states = self.norm1(hidden_states)
@@ -407,9 +491,6 @@ class Downsample2D(nn.Module):
             self.conv = conv
 
     def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-        if len(args) > 0 or kwargs.get("scale", None) is not None:
-            deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
-            deprecate("scale", "1.0.0", deprecation_message)
         assert hidden_states.shape[1] == self.channels
 
         if self.norm is not None:
@@ -476,10 +557,6 @@ class DownEncoderBlock2D(nn.Module):
             self.downsamplers = None
 
     def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-        if len(args) > 0 or kwargs.get("scale", None) is not None:
-            deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
-            deprecate("scale", "1.0.0", deprecation_message)
-
         for resnet in self.resnets:
             hidden_states = resnet(hidden_states, temb=None)
 
@@ -688,10 +765,6 @@ class Upsample2D(nn.Module):
             self.Conv2d_0 = conv
 
     def forward(self, hidden_states: torch.Tensor, output_size: Optional[int] = None, *args, **kwargs) -> torch.Tensor:
-        if len(args) > 0 or kwargs.get("scale", None) is not None:
-            deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
-            deprecate("scale", "1.0.0", deprecation_message)
-
         assert hidden_states.shape[1] == self.channels
 
         if self.norm is not None:
@@ -699,12 +772,6 @@ class Upsample2D(nn.Module):
 
         if self.use_conv_transpose:
             return self.conv(hidden_states)
-
-        # Cast to float32 to as 'upsample_nearest2d_out_frame' op does not support bfloat16 until PyTorch 2.1
-        # https://github.com/pytorch/pytorch/issues/86679#issuecomment-1783978767
-        dtype = hidden_states.dtype
-        if dtype == torch.bfloat16 and is_torch_version("<", "2.1"):
-            hidden_states = hidden_states.to(torch.float32)
 
         # upsample_nearest_nhwc fails with large batch sizes. see https://github.com/huggingface/diffusers/issues/984
         if hidden_states.shape[0] >= 64:
@@ -725,10 +792,6 @@ class Upsample2D(nn.Module):
                 hidden_states = F.interpolate(hidden_states, scale_factor=2.0, mode="nearest")
             else:
                 hidden_states = F.interpolate(hidden_states, size=output_size, mode="nearest")
-
-        # Cast back to original dtype
-        if dtype == torch.bfloat16 and is_torch_version("<", "2.1"):
-            hidden_states = hidden_states.to(dtype)
 
         # TODO(Suraj, Patrick) - clean up after weight dicts are correctly renamed
         if self.use_conv:
@@ -1094,176 +1157,87 @@ class AutoencoderKL(nn.Module):
     _supports_gradient_checkpointing = True
     _no_split_modules = ["BasicTransformerBlock", "ResnetBlock2D"]
 
-    def __init__(
-        self,
-        in_channels: int = 3,
-        out_channels: int = 3,
-        down_block_types: Tuple[str] = ("DownEncoderBlock2D",),
-        up_block_types: Tuple[str] = ("UpDecoderBlock2D",),
-        block_out_channels: Tuple[int] = (64,),
-        layers_per_block: int = 1,
-        act_fn: str = "silu",
-        latent_channels: int = 4,
-        norm_num_groups: int = 32,
-        sample_size: int = 32,
-        scaling_factor: float = 0.18215,
-        shift_factor: Optional[float] = None,
-        latents_mean: Optional[Tuple[float]] = None,
-        latents_std: Optional[Tuple[float]] = None,
-        force_upcast: float = True,
-        use_quant_conv: bool = True,
-        use_post_quant_conv: bool = True,
-        mid_block_add_attention: bool = True,
-    ):
+    def __init__(self):
         super().__init__()
 
         # pass init params to Encoder
         self.encoder = Encoder(
-            in_channels=in_channels,
-            out_channels=latent_channels,
-            down_block_types=down_block_types,
-            block_out_channels=block_out_channels,
-            layers_per_block=layers_per_block,
-            act_fn=act_fn,
-            norm_num_groups=norm_num_groups,
+            in_channels=VAE_IN_CHANNELS,
+            out_channels=VAE_LATENT_CHANNELS,
+            down_block_types=VAE_DOWN_BLOCK_TYPES,
+            block_out_channels=VAE_BLOCK_OUT_CHANNELS,
+            layers_per_block=VAE_LAYERS_PER_BLOCK,
+            act_fn=VAE_ACT_FN,
+            norm_num_groups=VAE_NORM_NUM_GROUPS,
             double_z=True,
-            mid_block_add_attention=mid_block_add_attention,
+            mid_block_add_attention=True,
         )
 
         # pass init params to Decoder
         self.decoder = Decoder(
-            in_channels=latent_channels,
-            out_channels=out_channels,
-            up_block_types=up_block_types,
-            block_out_channels=block_out_channels,
-            layers_per_block=layers_per_block,
-            norm_num_groups=norm_num_groups,
-            act_fn=act_fn,
-            mid_block_add_attention=mid_block_add_attention,
+            in_channels=VAE_LATENT_CHANNELS,
+            out_channels=VAE_OUT_CHANNELS,
+            up_block_types=VAE_UP_BLOCK_TYPES,
+            block_out_channels=VAE_BLOCK_OUT_CHANNELS,
+            layers_per_block=VAE_LAYERS_PER_BLOCK,
+            norm_num_groups=VAE_NORM_NUM_GROUPS,
+            act_fn=VAE_ACT_FN,
+            mid_block_add_attention=True,
         )
 
-        self.quant_conv = nn.Conv2d(2 * latent_channels, 2 * latent_channels, 1) if use_quant_conv else None
-        self.post_quant_conv = nn.Conv2d(latent_channels, latent_channels, 1) if use_post_quant_conv else None
+        self.quant_conv = nn.Conv2d(2 * VAE_LATENT_CHANNELS, 2 * VAE_LATENT_CHANNELS, 1)
+        self.post_quant_conv = nn.Conv2d(VAE_LATENT_CHANNELS, VAE_LATENT_CHANNELS, 1)
 
         self.use_slicing = False
-        self.use_tiling = False
-
-        # only relevant if vae tiling is enabled
-        self.tile_sample_min_size = self.config.sample_size
-        sample_size = (
-            self.config.sample_size[0]
-            if isinstance(self.config.sample_size, (list, tuple))
-            else self.config.sample_size
-        )
-        self.tile_latent_min_size = int(sample_size / (2 ** (len(self.config.block_out_channels) - 1)))
-        self.tile_overlap_factor = 0.25
+        self.scaling_factor = 0.18215
 
     def _encode(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size, num_channels, height, width = x.shape
-
-        if self.use_tiling and (width > self.tile_sample_min_size or height > self.tile_sample_min_size):
-            return self._tiled_encode(x)
-
         enc = self.encoder(x)
         if self.quant_conv is not None:
             enc = self.quant_conv(enc)
 
         return enc
 
-    def encode(
-        self, x: torch.Tensor, return_dict: bool = True
-    ) -> Union[AutoencoderKLOutput, Tuple[DiagonalGaussianDistribution]]:
-        """
-        Encode a batch of images into latents.
-
-        Args:
-            x (`torch.Tensor`): Input batch of images.
-            return_dict (`bool`, *optional*, defaults to `True`):
-                Whether to return a [`~models.autoencoder_kl.AutoencoderKLOutput`] instead of a plain tuple.
-
-        Returns:
-                The latent representations of the encoded images. If `return_dict` is True, a
-                [`~models.autoencoder_kl.AutoencoderKLOutput`] is returned, otherwise a plain `tuple` is returned.
-        """
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
         if self.use_slicing and x.shape[0] > 1:
             encoded_slices = [self._encode(x_slice) for x_slice in x.split(1)]
             h = torch.cat(encoded_slices)
         else:
             h = self._encode(x)
 
-        posterior = DiagonalGaussianDistribution(h)
+        return h
 
-        if not return_dict:
-            return (posterior,)
-
-        return AutoencoderKLOutput(latent_dist=posterior)
-
-    def _decode(self, z: torch.Tensor, return_dict: bool = True) -> Union[DecoderOutput, torch.Tensor]:
-        if self.use_tiling and (z.shape[-1] > self.tile_latent_min_size or z.shape[-2] > self.tile_latent_min_size):
-            return self.tiled_decode(z, return_dict=return_dict)
-
+    def _decode(self, z: torch.Tensor) -> torch.Tensor:
         if self.post_quant_conv is not None:
             z = self.post_quant_conv(z)
 
         dec = self.decoder(z)
 
-        if not return_dict:
-            return (dec,)
+        return dec
 
-        return DecoderOutput(sample=dec)
-
-    def decode(
-        self, z: torch.FloatTensor, return_dict: bool = True, generator=None
-    ) -> Union[DecoderOutput, torch.FloatTensor]:
-        """
-        Decode a batch of images.
-
-        Args:
-            z (`torch.Tensor`): Input batch of latent vectors.
-            return_dict (`bool`, *optional*, defaults to `True`):
-                Whether to return a [`~models.vae.DecoderOutput`] instead of a plain tuple.
-
-        Returns:
-            [`~models.vae.DecoderOutput`] or `tuple`:
-                If return_dict is True, a [`~models.vae.DecoderOutput`] is returned, otherwise a plain `tuple` is
-                returned.
-
-        """
+    def decode(self, z: torch.FloatTensor, generator=None) -> torch.FloatTensor:
         if self.use_slicing and z.shape[0] > 1:
-            decoded_slices = [self._decode(z_slice).sample for z_slice in z.split(1)]
+            decoded_slices = [self._decode(z_slice) for z_slice in z.split(1)]
             decoded = torch.cat(decoded_slices)
         else:
-            decoded = self._decode(z).sample
+            decoded = self._decode(z)
 
-        if not return_dict:
-            return (decoded,)
-
-        return DecoderOutput(sample=decoded)
+        return decoded
 
     def forward(
         self,
         sample: torch.Tensor,
         sample_posterior: bool = False,
-        return_dict: bool = True,
         generator: Optional[torch.Generator] = None,
-    ) -> Union[DecoderOutput, torch.Tensor]:
-        r"""
-        Args:
-            sample (`torch.Tensor`): Input sample.
-            sample_posterior (`bool`, *optional*, defaults to `False`):
-                Whether to sample from the posterior.
-            return_dict (`bool`, *optional*, defaults to `True`):
-                Whether or not to return a [`DecoderOutput`] instead of a plain tuple.
-        """
+    ) -> torch.Tensor:
+        r"""Forward pass returning decoded pixels."""
         x = sample
-        posterior = self.encode(x).latent_dist
+        moments = self.encode(x)
+        posterior = DiagonalGaussianDistribution(moments)
         if sample_posterior:
             z = posterior.sample(generator=generator)
         else:
             z = posterior.mode()
-        dec = self.decode(z).sample
+        dec = self.decode(z)
 
-        if not return_dict:
-            return (dec,)
-
-        return DecoderOutput(sample=dec)
+        return dec
