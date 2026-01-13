@@ -13,8 +13,6 @@
 # limitations under the License.
 from typing import Optional, Tuple, Union, List
 import logging
-from functools import partial
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -95,7 +93,6 @@ class Attention(nn.Module):
         eps: float = 1e-6,
         norm_num_groups: Optional[int] = None,
         bias: bool = True,
-        _from_deprecated_attn_block: bool = False,
     ):
         super().__init__()
         norm_num_groups = norm_num_groups or 32
@@ -111,7 +108,7 @@ class Attention(nn.Module):
         self.to_v = nn.Linear(channels, inner_dim, bias=bias)
         self.to_out = nn.ModuleList([nn.Linear(inner_dim, channels, bias=bias), nn.Dropout(0.0)])
 
-    def forward(self, hidden_states: torch.Tensor, temb: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         residual = hidden_states
         hidden_states = self.group_norm(hidden_states)
 
@@ -232,36 +229,23 @@ class ResnetBlock2D(nn.Module):
         *,
         in_channels: int,
         out_channels: int,
-        conv_shortcut: bool = False,
         dropout: float = 0.0,
-        temb_channels: int = 512,
         groups: int = 32,
-        groups_out: Optional[int] = None,
-        pre_norm: bool = True,
         eps: float = 1e-6,
-        non_linearity: str = "swish",
-        skip_time_act: bool = False,
-        time_embedding_norm: str = "default",  # default, scale_shift,
-        kernel: Optional[torch.Tensor] = None,
         output_scale_factor: float = 1.0,
-        up: bool = False,
-        down: bool = False,
         conv_shortcut_bias: bool = True,
         conv_2d_out_channels: Optional[int] = None,
     ):
         super().__init__()
-        self.pre_norm = True
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.use_conv_shortcut = conv_shortcut
         self.output_scale_factor = output_scale_factor
-        groups_out = groups
 
         self.norm1 = torch.nn.GroupNorm(num_groups=groups, num_channels=in_channels, eps=eps, affine=True)
 
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
 
-        self.norm2 = torch.nn.GroupNorm(num_groups=groups_out, num_channels=out_channels, eps=eps, affine=True)
+        self.norm2 = torch.nn.GroupNorm(num_groups=groups, num_channels=out_channels, eps=eps, affine=True)
 
         self.dropout = torch.nn.Dropout(dropout)
         conv_2d_out_channels = conv_2d_out_channels or out_channels
@@ -282,7 +266,7 @@ class ResnetBlock2D(nn.Module):
                 bias=conv_shortcut_bias,
             )
 
-    def forward(self, input_tensor: torch.Tensor, temb: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+    def forward(self, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = input_tensor
 
         hidden_states = self.norm1(hidden_states)
@@ -336,7 +320,7 @@ class Downsample2D(nn.Module):
             self.channels, self.out_channels, kernel_size=kernel_size, stride=stride, padding=0, bias=bias
         )
 
-    def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         assert hidden_states.shape[1] == self.channels
 
         hidden_states = F.pad(hidden_states, (0, 1, 0, 1), mode="constant", value=0)
@@ -356,13 +340,9 @@ class DownEncoderBlock2D(nn.Module):
         dropout: float = 0.0,
         num_layers: int = 1,
         resnet_eps: float = 1e-6,
-        resnet_time_scale_shift: str = "default",
-        resnet_act_fn: str = "swish",
         resnet_groups: int = 32,
-        resnet_pre_norm: bool = True,
         output_scale_factor: float = 1.0,
         add_downsample: bool = True,
-        downsample_padding: int = 1,
     ):
         super().__init__()
         resnets = []
@@ -373,14 +353,10 @@ class DownEncoderBlock2D(nn.Module):
                 ResnetBlock2D(
                     in_channels=in_channels,
                     out_channels=out_channels,
-                    temb_channels=None,
                     eps=resnet_eps,
                     groups=resnet_groups,
                     dropout=dropout,
-                    time_embedding_norm=resnet_time_scale_shift,
-                    non_linearity=resnet_act_fn,
                     output_scale_factor=output_scale_factor,
-                    pre_norm=resnet_pre_norm,
                 )
             )
 
@@ -395,9 +371,9 @@ class DownEncoderBlock2D(nn.Module):
         else:
             self.downsamplers = None
 
-    def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         for resnet in self.resnets:
-            hidden_states = resnet(hidden_states, temb=None)
+            hidden_states = resnet(hidden_states)
 
         if self.downsamplers is not None:
             for downsampler in self.downsamplers:
@@ -440,16 +416,9 @@ class UNetMidBlock2D(nn.Module):
     def __init__(
         self,
         in_channels: int,
-        temb_channels: int,
-        dropout: float = 0.0,
         num_layers: int = 1,
         resnet_eps: float = 1e-6,
-        resnet_time_scale_shift: str = "default",  # default, spatial
-        resnet_act_fn: str = "swish",
         resnet_groups: int = 32,
-        attn_groups: Optional[int] = None,
-        resnet_pre_norm: bool = True,
-        add_attention: bool = True,
         attention_head_dim: int = 1,
         output_scale_factor: float = 1.0,
     ):
@@ -460,14 +429,10 @@ class UNetMidBlock2D(nn.Module):
             ResnetBlock2D(
                 in_channels=in_channels,
                 out_channels=in_channels,
-                temb_channels=temb_channels,
                 eps=resnet_eps,
                 groups=resnet_groups,
-                dropout=dropout,
-                time_embedding_norm=resnet_time_scale_shift,
-                non_linearity=resnet_act_fn,
+                dropout=0.0,
                 output_scale_factor=output_scale_factor,
-                pre_norm=resnet_pre_norm,
             )
         ]
         attentions = []
@@ -482,7 +447,6 @@ class UNetMidBlock2D(nn.Module):
                     eps=resnet_eps,
                     norm_num_groups=attn_groups,
                     bias=True,
-                    _from_deprecated_attn_block=True,
                 )
             )
 
@@ -490,25 +454,21 @@ class UNetMidBlock2D(nn.Module):
                 ResnetBlock2D(
                     in_channels=in_channels,
                     out_channels=in_channels,
-                    temb_channels=temb_channels,
                     eps=resnet_eps,
                     groups=resnet_groups,
-                    dropout=dropout,
-                    time_embedding_norm=resnet_time_scale_shift,
-                    non_linearity=resnet_act_fn,
+                    dropout=0.0,
                     output_scale_factor=output_scale_factor,
-                    pre_norm=resnet_pre_norm,
                 )
             )
 
         self.attentions = nn.ModuleList(attentions)
         self.resnets = nn.ModuleList(resnets)
 
-    def forward(self, hidden_states: torch.Tensor, temb: Optional[torch.Tensor] = None) -> torch.Tensor:
-        hidden_states = self.resnets[0](hidden_states, temb)
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.resnets[0](hidden_states)
         for attn, resnet in zip(self.attentions, self.resnets[1:]):
-            hidden_states = attn(hidden_states, temb=temb)
-            hidden_states = resnet(hidden_states, temb)
+            hidden_states = attn(hidden_states)
+            hidden_states = resnet(hidden_states)
 
         return hidden_states
 
@@ -542,7 +502,7 @@ class Upsample2D(nn.Module):
         self.out_channels = out_channels or channels
         self.conv = nn.Conv2d(self.channels, self.out_channels, kernel_size=kernel_size, padding=padding, bias=bias)
 
-    def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         assert hidden_states.shape[1] == self.channels
 
         # upsample_nearest_nhwc fails with large batch sizes. see https://github.com/huggingface/diffusers/issues/984
@@ -560,17 +520,11 @@ class UpDecoderBlock2D(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        resolution_idx: Optional[int] = None,
-        dropout: float = 0.0,
         num_layers: int = 1,
         resnet_eps: float = 1e-6,
-        resnet_time_scale_shift: str = "default",  # default, spatial
-        resnet_act_fn: str = "swish",
         resnet_groups: int = 32,
-        resnet_pre_norm: bool = True,
         output_scale_factor: float = 1.0,
         add_upsample: bool = True,
-        temb_channels: Optional[int] = None,
     ):
         super().__init__()
         resnets = []
@@ -582,14 +536,10 @@ class UpDecoderBlock2D(nn.Module):
                 ResnetBlock2D(
                     in_channels=input_channels,
                     out_channels=out_channels,
-                    temb_channels=temb_channels,
                     eps=resnet_eps,
                     groups=resnet_groups,
-                    dropout=dropout,
-                    time_embedding_norm=resnet_time_scale_shift,
-                    non_linearity=resnet_act_fn,
+                    dropout=0.0,
                     output_scale_factor=output_scale_factor,
-                    pre_norm=resnet_pre_norm,
                 )
             )
 
@@ -600,11 +550,9 @@ class UpDecoderBlock2D(nn.Module):
         else:
             self.upsamplers = None
 
-        self.resolution_idx = resolution_idx
-
-    def forward(self, hidden_states: torch.Tensor, temb: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         for resnet in self.resnets:
-            hidden_states = resnet(hidden_states, temb=temb)
+            hidden_states = resnet(hidden_states)
 
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:
@@ -645,9 +593,6 @@ class Encoder(nn.Module):
         block_out_channels: Tuple[int, ...] = (64,),
         layers_per_block: int = 2,
         norm_num_groups: int = 32,
-        act_fn: str = "silu",
-        double_z: bool = True,
-        mid_block_add_attention=True,
     ):
         super().__init__()
         self.layers_per_block = layers_per_block
@@ -676,10 +621,7 @@ class Encoder(nn.Module):
                 dropout=0.0,
                 add_downsample=not is_final_block,
                 resnet_eps=1e-6,
-                resnet_act_fn=act_fn,
                 resnet_groups=norm_num_groups,
-                downsample_padding=0,
-                resnet_time_scale_shift="default",
             )
 
             self.down_blocks.append(down_block)
@@ -688,13 +630,9 @@ class Encoder(nn.Module):
         self.mid_block = UNetMidBlock2D(
             in_channels=block_out_channels[-1],
             resnet_eps=1e-6,
-            resnet_act_fn=act_fn,
             output_scale_factor=1,
-            resnet_time_scale_shift="default",
             attention_head_dim=block_out_channels[-1],
             resnet_groups=norm_num_groups,
-            temb_channels=None,
-            add_attention=mid_block_add_attention,
         )
 
         # out
@@ -755,9 +693,6 @@ class Decoder(nn.Module):
         block_out_channels: Tuple[int, ...] = (64,),
         layers_per_block: int = 2,
         norm_num_groups: int = 32,
-        act_fn: str = "silu",
-        norm_type: str = "group",  # group, spatial
-        mid_block_add_attention=True,
     ):
         super().__init__()
         self.layers_per_block = layers_per_block
@@ -772,19 +707,14 @@ class Decoder(nn.Module):
 
         self.up_blocks = nn.ModuleList([])
 
-        temb_channels = None
-
         # mid
         self.mid_block = UNetMidBlock2D(
             in_channels=block_out_channels[-1],
             resnet_eps=1e-6,
-            resnet_act_fn=act_fn,
             output_scale_factor=1,
-            resnet_time_scale_shift="default",
             attention_head_dim=block_out_channels[-1],
             resnet_groups=norm_num_groups,
-            temb_channels=temb_channels,
-            add_attention=mid_block_add_attention,
+            num_layers=1,
         )
 
         # up
@@ -800,14 +730,9 @@ class Decoder(nn.Module):
                 num_layers=self.layers_per_block + 1,
                 in_channels=prev_output_channel,
                 out_channels=output_channel,
-                resolution_idx=None,
-                dropout=0.0,
                 add_upsample=not is_final_block,
                 resnet_eps=1e-6,
-                resnet_act_fn=act_fn,
                 resnet_groups=norm_num_groups,
-                resnet_time_scale_shift=norm_type,
-                temb_channels=temb_channels,
             )
 
             self.up_blocks.append(up_block)
@@ -891,10 +816,7 @@ class AutoencoderKL(nn.Module):
             down_block_types=VAE_DOWN_BLOCK_TYPES,
             block_out_channels=VAE_BLOCK_OUT_CHANNELS,
             layers_per_block=VAE_LAYERS_PER_BLOCK,
-            act_fn=VAE_ACT_FN,
             norm_num_groups=VAE_NORM_NUM_GROUPS,
-            double_z=True,
-            mid_block_add_attention=True,
         )
 
         # pass init params to Decoder
@@ -905,8 +827,6 @@ class AutoencoderKL(nn.Module):
             block_out_channels=VAE_BLOCK_OUT_CHANNELS,
             layers_per_block=VAE_LAYERS_PER_BLOCK,
             norm_num_groups=VAE_NORM_NUM_GROUPS,
-            act_fn=VAE_ACT_FN,
-            mid_block_add_attention=True,
         )
 
         self.quant_conv = nn.Conv2d(2 * VAE_LATENT_CHANNELS, 2 * VAE_LATENT_CHANNELS, 1)
@@ -927,7 +847,7 @@ class AutoencoderKL(nn.Module):
         z = self.post_quant_conv(z)
         return self.decoder(z)
 
-    def decode(self, z: torch.FloatTensor, generator=None) -> torch.FloatTensor:
+    def decode(self, z: torch.FloatTensor) -> torch.FloatTensor:
         return self._decode(z)
 
     def forward(
