@@ -10,8 +10,8 @@
 # Changes by triloy8:
 #   • Deconstructed pipeline
 
-from autoencoder_kl import AutoencoderKL
 from huggingface_hub import snapshot_download
+from min_autoencoder_kl import AutoencoderKL
 from min_eulerd import EulerDiscreteScheduler
 from min_unet import UNet2DConditionModel
 from min_clip import CLIPTextModel
