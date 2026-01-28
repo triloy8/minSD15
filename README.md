@@ -1,8 +1,10 @@
-# Motivation
+<h1 align="center">minSD15</h1>
+
+# ✨ Motivation
 
 This project is a minimal, educational re‑implementation of the Stable Diffusion 1.5 sampling pipeline. I use HuggingFace Diffusers as a reference, then strip away all the extra convenience layers.
 
-# Usage
+# 🛠️ Usage
 
 Make sure to have [`uv`](https://github.com/astral-sh/uv) installed and just use 
 ```bash
@@ -10,10 +12,11 @@ Make sure to have [`uv`](https://github.com/astral-sh/uv) installed and just use
 ```
 
 
-# Gallery
+# 🖼️ Gallery
 
 Dog paintings generated with the min pipeline (resized previews):
 
+<div align="center">
 <table>
   <tr>
     <td><img src="gallery/caravaggio_dog.png" width="360" alt="Caravaggio dog" /></td>
@@ -28,8 +31,9 @@ Dog paintings generated with the min pipeline (resized previews):
     <td><img src="gallery/basquiat_dog.png" width="360" alt="Basquiat dog" /></td>
   </tr>
 </table>
+</div>
 
-# Components
+# 🧩 Components
 
 - **Pipeline skeleton** — done (deconstructed Diffusers pipeline)
 - **UNet (SD 1.5)** — done (adapted from minSDXL)
@@ -38,7 +42,7 @@ Dog paintings generated with the min pipeline (resized previews):
 - **VAE (AutoencoderKL)** — done (adapted from Diffusers)
 - **CLIP tokenizer** — not done (yet)
 
-# Diffusion theory
+# 📚 Diffusion theory
 
 Two papers underpin the maths and variable names used here:
 
