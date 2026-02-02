@@ -1,4 +1,4 @@
-<h1 align="center">minSD15</h1>
+<h1 align="center">🌀 minSD15 🌫️</h1>
 
 # ✨ Motivation
 
